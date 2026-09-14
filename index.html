@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Aqua Luan — Bodega</title>
+<link rel="manifest" href="./manifest.json">
+<meta name="theme-color" content="#1a3a5c">
+<link rel="icon" href="https://aqualuanpedidos.elhyai.com/logo-icon.png">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root{--navy:#1a3a5c;--teal:#0a7c6e;--bg:#e8f0f5;--card:#fff;--text:#1a3a5c;--muted:rgba(26,58,92,.5);--red:#c0392b;--border:rgba(0,80,120,.12);}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'DM Sans',system-ui,sans-serif;background:linear-gradient(135deg,#dde8f2,#e8f2f8);color:var(--text);min-height:100vh;}
+.wrap{max-width:480px;margin:0 auto;padding:16px 16px 88px;}
+.card{background:var(--card);border-radius:16px;padding:16px;box-shadow:0 4px 20px rgba(26,58,92,.08);margin-bottom:12px;}
+h1{font-size:20px;margin-bottom:4px}
+.sub{font-size:12px;color:var(--muted);margin-bottom:14px}
+label{display:block;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:10px 0 6px}
+input,select,textarea{width:100%;padding:11px 12px;border:1.5px solid var(--border);border-radius:10px;font:600 14px 'DM Sans',sans-serif;color:var(--text);background:#f7fafb}
+.btn{width:100%;border:0;border-radius:12px;padding:13px;font:800 15px 'DM Sans',sans-serif;cursor:pointer}
+.btn-teal{background:var(--teal);color:#fff}
+.btn-navy{background:var(--navy);color:#fff}
+.btn-out{background:#fff;color:var(--navy);border:1.5px solid var(--border)}
+.err{display:none;background:#fdecea;color:#b71c1c;padding:10px;border-radius:10px;font-size:13px;font-weight:600;margin-bottom:10px}
+.err.show{display:block}
+.ok{display:none;background:#e6f4f2;color:#085f54;padding:10px;border-radius:10px;font-size:13px;font-weight:600;margin-bottom:10px}
+.ok.show{display:block}
+.banner{display:none;background:#fff8e1;color:#795c00;padding:8px 12px;border-radius:10px;font-size:12px;font-weight:700;margin-bottom:10px}
+.banner.show{display:block}
+.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+.who{font-size:12px;font-weight:700}
+.nav{position:fixed;left:0;right:0;bottom:0;background:#fff;display:grid;grid-template-columns:repeat(4,1fr);border-top:1px solid var(--border);padding:8px 6px calc(8px + env(safe-area-inset-bottom));}
+.nav button{border:0;background:transparent;font:700 11px 'DM Sans',sans-serif;color:var(--muted);padding:6px 2px}
+.nav button.on{color:var(--teal)}
+.screen{display:none}
+.screen.on{display:block}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);padding:6px 4px}
+td{padding:8px 4px;border-top:1px solid var(--border)}
+.stock-bajo{color:var(--red);font-weight:800}
+.login-box{margin-top:12vh}
+.logo{text-align:center;margin-bottom:16px}
+.logo img{height:52px}
+</style>
+</head>
+<body>
+<div id="loginView" class="wrap login-box">
+  <div class="card">
+    <div class="logo"><img src="https://aqualuanpedidos.elhyai.com/logo-luanaqua.png" alt="Aqua Luan" onerror="this.style.display='none'"><h1>Bodega</h1><p class="sub">Solo personal de bodega</p></div>
+    <div id="loginErr" class="err"></div>
+    <label>Usuario</label>
+    <input id="user" autocomplete="username">
+    <label>Contraseña</label>
+    <input id="pass" type="password" autocomplete="current-password">
+    <button class="btn btn-teal" style="margin-top:16px" onclick="doLogin()">Entrar</button>
+  </div>
+</div>
+<div id="appView" class="wrap" style="display:none">
+  <div class="top">
+    <div><h1>Bodega</h1><div class="who" id="who">—</div></div>
+    <button class="btn btn-out" style="width:auto;padding:8px 12px;font-size:12px" onclick="doLogout()">Salir</button>
+  </div>
+  <div id="offBanner" class="banner">Sin internet. El movimiento se guarda en el celular y sube solo.</div>
+  <div id="msgOk" class="ok"></div>
+  <div id="msgErr" class="err"></div>
+  <div id="sc-entrada" class="screen on">
+    <div class="card">
+      <h1>📥 Entrada</h1>
+      <p class="sub">Compra, devolución de ruta o ajuste a favor</p>
+      <label>Producto</label><select id="enProd"></select>
+      <label>Cantidad</label><input id="enCant" type="number" min="1" step="1">
+      <label>Motivo</label>
+      <select id="enMotivo"><option value="Compra">Compra</option><option value="Devolución de ruta">Devolución de ruta</option><option value="Ajuste">Ajuste</option></select>
+      <label>Nota</label><input id="enNota" placeholder="Proveedor u observación">
+      <button class="btn btn-teal" style="margin-top:14px" onclick="guardarMov('entrada')">Guardar entrada</button>
+    </div>
+  </div>
+  <div id="sc-salida" class="screen">
+    <div class="card">
+      <h1>📤 Salida</h1>
+      <p class="sub">Entrega a ruta, merma o ajuste</p>
+      <label>Producto</label><select id="saProd"></select>
+      <label>Cantidad</label><input id="saCant" type="number" min="1" step="1">
+      <label>Motivo</label>
+      <select id="saMotivo" onchange="toggleRuta()"><option value="Entrega a ruta">Entrega a ruta</option><option value="Merma">Merma</option><option value="Ajuste">Ajuste</option></select>
+      <div id="wrapRuta"><label>Ruta / asesor</label><select id="saRuta"><option value="">Seleccionar</option></select></div>
+      <label>Nota</label><input id="saNota" placeholder="Observación">
+      <button class="btn btn-navy" style="margin-top:14px" onclick="guardarMov('salida')">Guardar salida</button>
+    </div>
+  </div>
+  <div id="sc-stock" class="screen">
+    <div class="card">
+      <h1>📦 Stock</h1>
+      <p class="sub">Suma de todo el historial de movimientos</p>
+      <table><thead><tr><th>Producto</th><th style="text-align:right">Ent.</th><th style="text-align:right">Sal.</th><th style="text-align:right">Stock</th></tr></thead><tbody id="tbStock"></tbody></table>
+    </div>
+  </div>
+  <div id="sc-hist" class="screen">
+    <div class="card">
+      <h1>📋 Historial</h1>
+      <p class="sub">Últimos movimientos</p>
+      <table><thead><tr><th>Fecha</th><th>Producto</th><th>Tipo</th><th style="text-align:right">Cant.</th></tr></thead><tbody id="tbHist"></tbody></table>
+    </div>
+  </div>
+</div>
+<nav id="nav" class="nav" style="display:none">
+  <button class="on" onclick="ir('entrada')">📥<br>Entrada</button>
+  <button onclick="ir('salida')">📤<br>Salida</button>
+  <button onclick="ir('stock')">📦<br>Stock</button>
+  <button onclick="ir('hist')">📋<br>Historial</button>
+</nav>
+<script src="https://www.gstatic.com/firebasejs/12.11.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/12.11.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/12.11.0/firebase-firestore-compat.js"></script>
+<script>
+const firebaseConfig = {
+  apiKey: "AIzaSyBOPI_zviuktXtH68F8NY4mSnbYcF1tE7s",
+  authDomain: "luan-aqua.firebaseapp.com",
+  projectId: "luan-aqua",
+  storageBucket: "luan-aqua.firebasestorage.app",
+  messagingSenderId: "1046111203141",
+  appId: "1:1046111203141:web:017cd2d14f1db77c9c582c"
+};
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(()=>{});
+const db = firebase.firestore();
+db.enablePersistence({synchronizeTabs:true}).catch(()=>{});
+const DOMINIO = '@luanaqua.app';
+const FALLBACK_PROD = ['BOTELLON 20LT','BOTELLON CON LLAVE','PACA 625ML AZUL','PACA 600ML VERDE','PACA 1000ML','PACA 400ML','GALONES 4LT','POMA 5LTS','ENVASE CON LLAVE','ENVASE AZUL ADICIONAL'];
+let USER = {uid:null,nombre:'Bodega',usuario:''};
+let movs = [];
+function emailDe(u){
+  const limpio=String(u||'').trim().toLowerCase().replace(/[^a-z0-9._-]/g,'');
+  if(limpio==='admin') return 'elhychristian@gmail.com';
+  return limpio+DOMINIO;
+}
+function hoy(){ const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
+function show(el,t){ el.textContent=t; el.classList.add('show'); setTimeout(()=>el.classList.remove('show'),4000); }
+function ir(id){
+  ['entrada','salida','stock','hist'].forEach(s=>document.getElementById('sc-'+s).classList.toggle('on', s===id));
+  [...document.querySelectorAll('#nav button')].forEach((b,i)=>b.classList.toggle('on', ['entrada','salida','stock','hist'][i]===id));
+}
+function toggleRuta(){ document.getElementById('wrapRuta').style.display = document.getElementById('saMotivo').value==='Entrega a ruta' ? '' : 'none'; }
+window.addEventListener('online', ()=>document.getElementById('offBanner').classList.remove('show'));
+window.addEventListener('offline', ()=>document.getElementById('offBanner').classList.add('show'));
+if(!navigator.onLine) document.getElementById('offBanner').classList.add('show');
+async function doLogin(){
+  const user=document.getElementById('user').value.trim();
+  const pass=document.getElementById('pass').value;
+  const box=document.getElementById('loginErr');
+  box.classList.remove('show');
+  if(!user||!pass){ box.textContent='Completa usuario y contraseña.'; box.classList.add('show'); return; }
+  try{
+    const cred=await auth.signInWithEmailAndPassword(emailDe(user), pass);
+    const doc=await db.collection('usuarios').doc(cred.user.uid).get();
+    const p=doc.exists?doc.data():null;
+    if(!p || p.esBodeguero!==true){ await auth.signOut(); box.textContent='Esta cuenta no es de bodega.'; box.classList.add('show'); return; }
+  }catch(err){
+    box.textContent = (!navigator.onLine || err.code==='auth/network-request-failed') ? 'Sin internet. No se puede iniciar sesión ahora.' : 'Usuario o contraseña incorrectos.';
+    box.classList.add('show');
+  }
+}
+function doLogout(){ auth.signOut(); }
+auth.onAuthStateChanged(async u=>{
+  if(!u){ document.getElementById('loginView').style.display=''; document.getElementById('appView').style.display='none'; document.getElementById('nav').style.display='none'; return; }
+  const doc=await db.collection('usuarios').doc(u.uid).get();
+  const p=doc.exists?doc.data():null;
+  if(!p || p.esBodeguero!==true){ await auth.signOut(); return; }
+  USER={uid:u.uid,nombre:p.nombre||p.usuario||'Bodega',usuario:p.usuario||''};
+  document.getElementById('who').textContent=USER.nombre;
+  document.getElementById('loginView').style.display='none';
+  document.getElementById('appView').style.display='';
+  document.getElementById('nav').style.display='grid';
+  cargarCatalogos(); escucharMovs();
+});
+async function cargarCatalogos(){
+  let prods=FALLBACK_PROD.slice();
+  try{ const snap=await db.collection('productos').get(); const names=snap.docs.map(d=>d.data().nombre).filter(Boolean); if(names.length) prods=names.sort((a,b)=>a.localeCompare(b,'es')); }catch(e){}
+  const opts=prods.map(n=>`<option value="${n.replace(/"/g,'"')}">${n}</option>`).join('');
+  document.getElementById('enProd').innerHTML=opts; document.getElementById('saProd').innerHTML=opts;
+  let rutas=['RUTA 1: Jefferson','RUTA 2: Luis','RUTA 3: Vicente','RUTA 4: Wilson'];
+  try{ const us=await db.collection('usuarios').get(); const ases=us.docs.map(d=>d.data()).filter(x=>x.esAdmin!==true && x.esSecretaria!==true && x.esBodeguero!==true && (x.nombre||x.usuario)); if(ases.length) rutas=ases.map(x=>x.ruta || x.nombre || x.usuario); }catch(e){}
+  document.getElementById('saRuta').innerHTML='<option value="">Seleccionar</option>'+rutas.map(r=>`<option>${r}</option>`).join('');
+}
+function escucharMovs(){
+  db.collection('inventarioMovimientos').onSnapshot(snap=>{
+    movs=snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(b.creadoEn?.toMillis?.()||0)-(a.creadoEn?.toMillis?.()||0));
+    pintarStock(); pintarHist();
+  }, err=>console.warn(err));
+}
+function pintarStock(){
+  const map={};
+  movs.forEach(m=>{ const p=m.producto||'—'; if(!map[p]) map[p]={e:0,s:0}; const c=Number(m.cantidad)||0; if(m.tipo==='entrada') map[p].e+=c; else map[p].s+=c; });
+  const rows=Object.keys(map).sort((a,b)=>a.localeCompare(b,'es')).map(p=>{ const st=map[p].e-map[p].s; return `<tr><td>${p}</td><td style="text-align:right">${map[p].e}</td><td style="text-align:right">${map[p].s}</td><td style="text-align:right" class="${st<=5?'stock-bajo':''}">${st}</td></tr>`; });
+  document.getElementById('tbStock').innerHTML=rows.join('')||'<tr><td colspan="4">Sin movimientos</td></tr>';
+}
+function pintarHist(){
+  document.getElementById('tbHist').innerHTML = movs.slice(0,80).map(m=>`<tr><td>${m.fecha||'—'}</td><td>${m.producto||'—'}</td><td>${m.tipo==='entrada'?'Entrada':'Salida'}</td><td style="text-align:right">${m.cantidad||0}</td></tr>`).join('') || '<tr><td colspan="4">Sin historial</td></tr>';
+}
+async function guardarMov(tipo){
+  const pref=tipo==='entrada'?'en':'sa';
+  const producto=document.getElementById(pref+'Prod').value;
+  const cantidad=parseFloat(document.getElementById(pref+'Cant').value);
+  let motivo=document.getElementById(pref+'Motivo').value;
+  const nota=(document.getElementById(pref+'Nota').value||'').trim();
+  if(tipo==='salida' && motivo==='Entrega a ruta'){ const ruta=document.getElementById('saRuta').value; if(!ruta){ show(document.getElementById('msgErr'),'Elige la ruta.'); return; } motivo='Entrega a ruta — '+ruta; }
+  if(!producto){ show(document.getElementById('msgErr'),'Elige producto.'); return; }
+  if(!cantidad||cantidad<=0){ show(document.getElementById('msgErr'),'Cantidad inválida.'); return; }
+  try{
+    await db.collection('inventarioMovimientos').add({ producto, tipo, cantidad, fecha: hoy(), motivo: nota ? (motivo+' · '+nota) : motivo, usuario: USER.nombre, creadoPor: USER.uid, creadoEn: firebase.firestore.FieldValue.serverTimestamp() });
+    document.getElementById(pref+'Cant').value=''; document.getElementById(pref+'Nota').value='';
+    show(document.getElementById('msgOk'), (tipo==='entrada'?'Entrada':'Salida')+' de '+cantidad+' '+producto+' guardada.');
+    ir(tipo==='entrada'?'stock':'hist');
+  }catch(err){ show(document.getElementById('msgErr'), 'No se pudo guardar: '+(err.message||err.code)); }
+}
+if('serviceWorker'in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js',{updateViaCache:'none'}).catch(()=>{})); }
+</script>
+</body>
+</html>
