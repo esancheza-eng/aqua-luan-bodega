@@ -1,24 +1,19 @@
-# Aqua Luan — Bodega
+# Aqua Luan — Control de Bodega / Conductor
 
-App del bodeguero: login + 4 pantallas (Entrada, Salida, Stock, Historial).
+PWA que digitaliza la hoja **Hoja_Control_Conductor_AquaLuan**.
 
 - Repo: https://github.com/esancheza-eng/aqua-luan-bodega
-- Misma base Firebase que el dashboard (`luan-aqua`)
-- Escribe en `inventarioMovimientos` (se ve en Inventario del dashboard)
+- Firebase: proyecto `luan-aqua` (mismo que pedidos/dashboard)
+- Colecciones nuevas:
+  - `controlesBodega` — despachos diarios
+  - `productosControl` — catálogo editable
+  - `alertasBodega` — alertas de faltantes / diferencias
+  - `auditoriaBodega` — quién creó/modificó/cerró
+
+## Roles
+ADMINISTRADOR, BODEGUERO, ASESOR, CONDUCTOR, SUPERVISOR (campo `rol` o flags en `usuarios`).
+
+Asesores se leen de Firestore `usuarios`. Fallback: Jefferson, Luis, Vicente, Wilson.
 
 ## Publicar
-
-1. Settings → Pages → Deploy from branch `main` / root
-2. Dominio sugerido: `bodega.elhyai.com` (archivo `CNAME`)
-3. Firebase Auth → Authorized domains → agregar `bodega.elhyai.com`
-
-## Usuario
-
-En Firestore, colección `usuarios`, el perfil debe tener:
-
-```
-esBodeguero: true
-esAdmin: false
-esSecretaria: false
-rol: BODEGUERO
-```
+GitHub Pages branch `main` / root. Dominio `bodega.elhyai.com`.
