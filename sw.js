@@ -1,4 +1,4 @@
-const CACHE_NAME = 'luan-bodega-v1';
+const CACHE_NAME = 'luan-bodega-v2';
 const APP_SHELL = ['./', './index.html', './manifest.json'];
 const CDN = [
   'https://www.gstatic.com/firebasejs/12.11.0/firebase-app-compat.js',
@@ -15,7 +15,8 @@ self.addEventListener('install', e=>{
   self.skipWaiting();
   e.waitUntil((async()=>{
     const cache=await caches.open(CACHE_NAME);
-    for(const u of APP_SHELL){ try{ await cache.add(u); }catch(err){} }
+    for(const u of APP_SHELL){ try{ await cache.add(u); }catch(err){}
+    }
     for(const u of CDN){
       try{ const r=await fetch(u,{mode:'cors',credentials:'omit'}); if(r.ok) await cache.put(u,r.clone()); }catch(err){}
     }
