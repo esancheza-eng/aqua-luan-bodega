@@ -1,14 +1,14 @@
 {
-  "name": "Aqua Luan Bodega",
+  "name": "Aqua Luan Control Bodega",
   "short_name": "Bodega",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#1a3a5c",
-  "theme_color": "#1a3a5c",
+  "background_color": "#0a4d4a",
+  "theme_color": "#0a4d4a",
   "lang": "es",
-  "description": "Entradas, salidas y stock de bodega Aqua Luan",
+  "description": "Control de bodega y conductor Aqua Luan — despacho, envases e inventario",
   "icons": [
     { "src": "https://aqualuanpedidos.elhyai.com/icons/launchericon-192x192.png", "sizes": "192x192", "type": "image/png" },
     { "src": "https://aqualuanpedidos.elhyai.com/icons/launchericon-512x512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
