@@ -195,13 +195,46 @@ window.addEventListener('online', ()=>document.getElementById('offBanner').class
 window.addEventListener('offline', ()=>document.getElementById('offBanner').classList.add('show'));
 if(!navigator.onLine) document.getElementById('offBanner').classList.add('show');
 async function doLogin(){const user=document.getElementById('user').value.trim();const pass=document.getElementById('pass').value;const box=document.getElementById('loginErr');box.classList.remove('show');if(!user||!pass){ box.textContent='Completa usuario y contraseña.'; box.classList.add('show'); return; }try{const cred=await auth.signInWithEmailAndPassword(emailDe(user), pass);const doc=await db.collection('usuarios').doc(cred.user.uid).get();const p=doc.exists?doc.data():null;if(!puedeEntrar(p)){ await auth.signOut(); box.textContent='Esta cuenta no tiene acceso al control de bodega.'; box.classList.add('show'); }}catch(err){box.textContent = (!navigator.onLine || err.code==='auth/network-request-failed') ? 'Sin internet.' : 'Usuario o contraseña incorrectos.';box.classList.add('show');}}
-function doLogout(){ auth.signOut(); }
-auth.onAuthStateChanged(async u=>{if(!u){ document.getElementById('loginView').style.display=''; document.getElementById('appView').style.display='none'; document.getElementById('nav').style.display='none'; return; }const doc=await db.collection('usuarios').doc(u.uid).get();const p=doc.exists?doc.data():null;if(!puedeEntrar(p)){ await auth.signOut(); return; }USER={uid:u.uid,nombre:p.nombre||p.usuario||'Usuario',usuario:p.usuario||'',rol:rolDe(p),esAdmin:rolDe(p)==='ADMINISTRADOR'};document.getElementById('who').textContent=USER.nombre+' · '+USER.rol;document.getElementById('loginView').style.display='none';document.getElementById('appView').style.display='';document.getElementById('nav').style.display='grid';await cargarCatalogos();escuchar();});
+function doLogout(){ dejarDeEscuchar(); auth.signOut(); }
+let _unsubsBodega=[];
+let _idleTimer=null;
+const IDLE_MS=15*60*1000;
+function dejarDeEscuchar(){
+  _unsubsBodega.forEach(fn=>{ try{ fn(); }catch(e){} });
+  _unsubsBodega=[];
+}
+function resetIdle(){
+  clearTimeout(_idleTimer);
+  if(!firebase.auth().currentUser) return;
+  _idleTimer=setTimeout(()=>{ dejarDeEscuchar(); auth.signOut(); }, IDLE_MS);
+}
+['click','keydown','mousemove','touchstart','visibilitychange'].forEach(ev=>{
+  document.addEventListener(ev, ()=>{
+    if(document.hidden){ dejarDeEscuchar(); }
+    else if(firebase.auth().currentUser && !_unsubsBodega.length){ escuchar(); }
+    resetIdle();
+  }, {passive:true});
+});
+auth.onAuthStateChanged(async u=>{if(!u){ dejarDeEscuchar(); clearTimeout(_idleTimer); document.getElementById('loginView').style.display=''; document.getElementById('appView').style.display='none'; document.getElementById('nav').style.display='none'; return; }const doc=await db.collection('usuarios').doc(u.uid).get();const p=doc.exists?doc.data():null;if(!puedeEntrar(p)){ await auth.signOut(); return; }USER={uid:u.uid,nombre:p.nombre||p.usuario||'Usuario',usuario:p.usuario||'',rol:rolDe(p),esAdmin:rolDe(p)==='ADMINISTRADOR'};document.getElementById('who').textContent=USER.nombre+' · '+USER.rol;document.getElementById('loginView').style.display='none';document.getElementById('appView').style.display='';document.getElementById('nav').style.display='grid';await cargarCatalogos();escuchar();resetIdle();});
 async function cargarCatalogos(){try{const snapPed=await db.collection('productos').get();const namesPed=snapPed.docs.map(d=>d.data().nombre).filter(Boolean);const snap=await db.collection('productosControl').get();if(namesPed.length){productos=[...new Set(namesPed.map(nomProd))].sort((a,b)=>a.localeCompare(b,'es'));} else if(!snap.empty){productos=snap.docs.map(d=>({id:d.id,...d.data()})).filter(x=>x.activo!==false).map(x=>nomProd(x.nombre));} else {productos=PRODUCTOS_BASE.slice();}}catch(e){ productos=PRODUCTOS_BASE.slice(); }try{const us=await db.collection('usuarios').get();const people=us.docs.map(d=>({id:d.id,...d.data()}));const nombres=people.filter(x=>x.nombre||x.usuario).map(x=>({nombre:x.nombre||x.usuario,rol:rolDe(x),ruta:x.ruta||''}));const ases=nombres.filter(x=>x.rol==='ASESOR' || (!['ADMINISTRADOR','BODEGUERO','SUPERVISOR','CONDUCTOR'].includes(x.rol) && x.ruta));asesores = ases.length ? ases.map(x=>x.ruta?`${x.ruta}: ${x.nombre}`:x.nombre) : ASESORES_FALLBACK.slice();conductores = [];ayudantes = [];bodegueros = nombres.filter(x=>x.rol==='BODEGUERO'||x.rol==='ADMINISTRADOR').map(x=>x.nombre);document.getElementById('cfgUsers').innerHTML = people.map(p=>`${p.nombre||p.usuario||p.id} — ${rolDe(p)}`).join('<br>') || 'Sin usuarios';fillSelect('fAsesor', asesores);}catch(e){}pintarCfgProds();}
 function fillSelect(id, arr){const el=document.getElementById(id);const cur=el.value;el.innerHTML='<option value="">Todos</option>'+arr.map(a=>`<option>${esc(a)}</option>`).join('');el.value=cur;}
 function pintarCfgProds(){document.getElementById('cfgProds').innerHTML = productos.map(p=>`<div class="list-item"><span>${esc(p)}</span></div>`).join('') || 'Sin productos';}
 async function agregarProducto(){if(USER.rol!=='ADMINISTRADOR'){ show(document.getElementById('msgErr'),'Solo administrador configura productos.'); return; }const nom=document.getElementById('nuevoProd').value.trim();if(!nom) return;await db.collection('productosControl').add({nombre:nom,activo:true,creadoEn:firebase.firestore.FieldValue.serverTimestamp()});await auditar('config','producto',nom,'','alta de producto');document.getElementById('nuevoProd').value='';await cargarCatalogos();}
-function escuchar(){db.collection('controlesBodega').orderBy('fecha','desc').limit(500).onSnapshot(snap=>{controles=snap.docs.map(d=>({id:d.id,...d.data()}));pintarDashboard(); pintarHistorial(); pintarPorPersona();}, err=>{db.collection('controlesBodega').onSnapshot(snap=>{controles=snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>String(b.fecha||'').localeCompare(String(a.fecha||'')));pintarDashboard(); pintarHistorial(); pintarPorPersona();});});db.collection('alertasBodega').orderBy('creadoEn','desc').limit(30).onSnapshot(snap=>{alertas=snap.docs.map(d=>({id:d.id,...d.data()}));pintarAlertas();}, ()=>{});db.collection('inventarioMovimientos').onSnapshot(snap=>{movsInv=snap.docs.map(d=>({id:d.id,...d.data()}));pintarStockLive();}, ()=>{});}
+function escuchar(){
+  dejarDeEscuchar();
+  _unsubsBodega.push(db.collection('controlesBodega').orderBy('fecha','desc').limit(200).onSnapshot(snap=>{
+    controles=snap.docs.map(d=>({id:d.id,...d.data()}));
+    pintarDashboard(); pintarHistorial(); pintarPorPersona();
+  }, err=>console.warn('controlesBodega', err)));
+  _unsubsBodega.push(db.collection('alertasBodega').orderBy('creadoEn','desc').limit(30).onSnapshot(snap=>{
+    alertas=snap.docs.map(d=>({id:d.id,...d.data()}));
+    pintarAlertas();
+  }, ()=>{}));
+  _unsubsBodega.push(db.collection('inventarioMovimientos').orderBy('creadoEn','desc').limit(400).onSnapshot(snap=>{
+    movsInv=snap.docs.map(d=>({id:d.id,...d.data()}));
+    pintarStockLive();
+  }, ()=>{}));
+}
 function pintarStockLive(){const el=document.getElementById('tbStockLive');if(!el) return;const map={};movsInv.forEach(m=>{const p=m.producto||'—';if(!map[p]) map[p]={e:0,s:0};const c=n(m.cantidad);if(m.tipo==='entrada') map[p].e+=c; else map[p].s+=c;});const keys=Object.keys(map).sort((a,b)=>a.localeCompare(b,'es'));el.innerHTML = keys.map(p=>{const st=map[p].e-map[p].s;const cls=st<=5?'style="text-align:right;color:#dc2626;font-weight:800"':'style="text-align:right"';return `<tr><td>${esc(p)}</td><td style="text-align:right">${map[p].e}</td><td style="text-align:right">${map[p].s}</td><td ${cls}>${st}</td></tr>`;}).join('') || '<tr><td colspan="4">Sin movimientos de inventario</td></tr>';}
 function filtrados(){const d1=document.getElementById('fDesde').value;const d2=document.getElementById('fHasta').value;const a=document.getElementById('fAsesor').value;const e=document.getElementById('fEstado').value;return controles.filter(x=>{if(d1 && (x.fecha||'')<d1) return false;if(d2 && (x.fecha||'')>d2) return false;if(a && x.asesor!==a) return false;if(e && x.estado!==e) return false;if(USER.rol==='ASESOR' && x.asesor!==USER.nombre && !(x.asesor||'').includes(USER.nombre)) return false;return true;});}
 function totCtrl(c){const lines=c.productos||[];const sum=(k)=>lines.reduce((s,l)=>s+n(l[k]),0);const vend=n(c.envVendidoAzul)+n(c.envVendidoLlave);const pres=n(c.envPrestadoAzul)+n(c.envPrestadoLlave);const reti=n(c.envRetiradoAzul)+n(c.envRetiradoLlave);const camb=n(c.cambioAzulPorLlave)+n(c.cambioLlavePorAzul);const falt=n(c.envFaltanteCant);const totalProd=sum('total');const ret=sum('retorno');const vac=sum('totalVacios');const entregados=sum('salida')+sum('recarga')+sum('traspaso');const retornados=sum('retorno')+sum('vacios1')+sum('vacios2');const balance=retornados + vend + pres + reti + falt - entregados;return {sum,vend,pres,reti,camb,falt,totalProd,ret,vac,entregados,retornados,balance};}
