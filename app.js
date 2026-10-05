@@ -654,7 +654,10 @@ function renderStock() {
     const fmtAj = v => v ? (v > 0 ? '+' : '') + num(v) : '0';
     const totCat = CATEGORIAS.map(cat => ({ cat, arr: items.filter(i => i.categoria === cat) })).filter(x => x.arr.length).map(x => ({ cat: x.cat, t: sumar(x.arr) }));
     const totGen = sumar(items);
-    cuerpo = `<div class="kpis"><div class="kpi"><span>Ítems de insumos</span><b>${items.length}</b></div>
+    const recibidos = items.filter(i => (st.ins[i.id]?.rec || 0) > 0).length;
+    cuerpo = `<div class="actions" style="justify-content:flex-end;margin:0 0 10px"><button class="btn btn-out" onclick="imprimirStockPDF()">📄 Imprimir PDF</button></div>
+      <div class="kpis"><div class="kpi"><span>Ítems de insumos</span><b>${items.length}</b></div>
+      <div class="kpi"><span>Ítems de insumos recibidos</span><b>${recibidos}</b><small>${num(totGen.rec)} unidades recibidas</small></div>
       <div class="kpi" style="border-color:var(--red)"><span>En o bajo mínimo</span><b>${bajos}</b></div>
       <div class="kpi"><span>Stock total de insumos</span><b>${num(totGen.stock)}</b><small>${totCat.map(x => esc(x.cat) + ': ' + num(x.t.stock)).join(' · ')}</small></div></div>` +
       (items.length ? CATEGORIAS.map(cat => {
@@ -845,6 +848,43 @@ function imprimirMovPDF(id) {
     ${m.totalUnidades ? `<tfoot><tr class="tot"><td></td><td colspan="2">TOTAL</td><td class="r">${num(m.totalUnidades)}</td></tr></tfoot>` : ''}</table>
     ${m.nota ? `<div class="obs"><b>Obs.:</b> ${esc(m.nota)}</div>` : ''}
     <div class="firmas">${firmas.map(([t, n]) => `<div class="f"><b>${esc(n || ' ')}</b>${t}</div>`).join('')}</div>
+    <div class="pie">Aqua Luan · Bodega</div>
+    <script>window.onload=function(){setTimeout(function(){window.print()},300)}<\/script></body></html>`;
+  const w = window.open('', '_blank');
+  if (!w) { alert('El navegador bloqueó la ventana de impresión. Permite ventanas emergentes para esta app.'); return; }
+  w.document.open(); w.document.write(html); w.document.close();
+}
+
+/* ── Reporte PDF del stock de insumos (A4) ─────────────────────────── */
+function imprimirStockPDF() {
+  const st = calcularStock(), items = insumosActivos();
+  const vacio = { rec: 0, prod: 0, dano: 0, aj: 0, stock: 0 };
+  const sumar = arr => arr.reduce((t, i) => { const s = st.ins[i.id] || vacio; t.rec += s.rec; t.prod += s.prod; t.dano += s.dano; t.aj += s.aj; t.stock += s.stock; return t; }, { rec: 0, prod: 0, dano: 0, aj: 0, stock: 0 });
+  const fmtAj = v => v ? (v > 0 ? '+' : '') + num(v) : '0';
+  const fila = (n, t, cls) => `<tr class="${cls || ''}"><td>${n}</td><td class="r">${num(t.rec)}</td><td class="r">${num(t.prod)}</td><td class="r">${num(t.dano)}</td><td class="r">${fmtAj(t.aj)}</td><td class="r b">${num(t.stock)}</td></tr>`;
+  const cats = CATEGORIAS.map(cat => ({ cat, arr: items.filter(i => i.categoria === cat) })).filter(x => x.arr.length).map(x => ({ ...x, t: sumar(x.arr) }));
+  const totGen = sumar(items), recibidos = items.filter(i => (st.ins[i.id]?.rec || 0) > 0).length;
+  const head = '<thead><tr><th>Ítem</th><th class="r">Recibido</th><th class="r">A prod.</th><th class="r">Dañado</th><th class="r">Ajuste</th><th class="r">Stock</th></tr></thead>';
+  const tablas = cats.map(x => `<h3>${esc(x.cat)}</h3><table>${head}<tbody>${x.arr.map(i => fila(esc(i.nombre), st.ins[i.id] || vacio)).join('')}</tbody><tfoot>${fila('TOTAL ' + esc(x.cat), x.t, 'tot')}</tfoot></table>`).join('');
+  const general = `<h3>Total general de insumos</h3><table>${head.replace('Ítem', 'Categoría')}<tbody>${cats.map(x => fila(esc(x.cat), x.t)).join('')}</tbody><tfoot>${fila('TOTAL GENERAL', totGen, 'tot')}</tfoot></table>`;
+  const ahora = new Date().toLocaleString('es-EC', { dateStyle: 'short', timeStyle: 'short' });
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Stock de insumos</title><style>
+    @page{size:A4;margin:15mm}*{margin:0;padding:0;box-sizing:border-box}body{font:12px/1.4 Arial,sans-serif;color:#000}
+    .head{display:flex;align-items:center;justify-content:space-between;border-bottom:2px solid #0b4f4a;padding-bottom:10px;margin-bottom:12px}
+    .logo{height:60px;width:auto}.tt{text-align:right}.tt h1{font-size:18px;color:#0b4f4a}.tt h2{font-size:12px;font-weight:normal;margin-top:2px}
+    .res{display:flex;gap:10px;margin-bottom:6px}.res div{flex:1;border:1px solid #ccc;border-left:4px solid #0b4f4a;padding:6px 8px}.res span{display:block;font-size:9.5px;color:#555;text-transform:uppercase}.res b{font-size:16px}
+    h3{font-size:13px;color:#0b4f4a;margin:14px 0 4px}table{width:100%;border-collapse:collapse;page-break-inside:avoid}
+    th{background:#0b4f4a;color:#fff;font-size:10px;text-transform:uppercase;text-align:left;padding:5px 7px}th.r{text-align:right}
+    td{border-bottom:1px solid #ccc;padding:5px 7px}.r{text-align:right;white-space:nowrap;width:85px}.b{font-weight:bold}
+    .tot td{border-top:2px solid #000;border-bottom:0;font-weight:bold;background:#eef5f4}
+    .firmas{display:flex;gap:50px;margin-top:70px;page-break-inside:avoid}.f{flex:1;border-top:1px solid #000;text-align:center;font-size:11px;padding-top:4px}.f b{display:block;font-size:13px}
+    .pie{margin-top:24px;font-size:10px;color:#777;text-align:center}
+    </style></head><body>
+    <div class="head"><img class="logo" src="${new URL('logo-luanaqua.png', location.href).href}" alt="AQUA LUAN" onerror="this.outerHTML='<h1>AQUA LUAN</h1>'">
+      <div class="tt"><h1>BODEGA · STOCK DE INSUMOS</h1><h2>Fecha: ${esc(ahora)}</h2></div></div>
+    <div class="res"><div><span>Ítems de insumos</span><b>${items.length}</b></div><div><span>Ítems de insumos recibidos</span><b>${recibidos}</b></div><div><span>Stock total de insumos</span><b>${num(totGen.stock)}</b></div></div>
+    ${tablas}${general}
+    <div class="firmas"><div class="f"><b>JOHANNA LOPEZ</b>FIRMA</div><div class="f"><b>&nbsp;</b>FIRMA REVISADO AQUA LUAN</div></div>
     <div class="pie">Aqua Luan · Bodega</div>
     <script>window.onload=function(){setTimeout(function(){window.print()},300)}<\/script></body></html>`;
   const w = window.open('', '_blank');
