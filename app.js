@@ -42,7 +42,7 @@ const _secApp = firebase.initializeApp(firebaseConfig, 'secundariaBodega');
 const _secAuth = _secApp.auth();
 const TS = () => firebase.firestore.FieldValue.serverTimestamp();
 
-const APP_VERSION = 'bodega-3.0.0';
+const APP_VERSION = 'bodega-3.1.0';
 const DOMINIO_LOGIN = '@luanaqua.app';
 function emailDeUsuario(u) {
   const limpio = String(u || '').trim().toLowerCase().replace(/[^a-z0-9._-]/g, '');
@@ -57,6 +57,7 @@ const ETAPAS = {
   TERMINADO:  { n: '3', titulo: 'Bodega de producto terminado', corto: 'P. terminado', area: 'TERMINADO', c: 'e3', desc: 'Producto listo que sale de producción y entra a la bodega de terminado.' },
   CARGA:      { n: '4', titulo: 'Carga al camión',            corto: 'Carga',        area: 'TERMINADO', c: 'e4', desc: 'Producto terminado que se carga al camión de cada asesor.' },
   DEVOLUCION: { n: '↩', titulo: 'Devolución del camión',      corto: 'Devolución',   area: 'TERMINADO', c: 'e5', desc: 'Producto LLENO que el asesor regresa sin vender.' },
+  RETORNO_ENVASE: { n: '♻', titulo: 'Retorno de envases prestados', corto: 'Envases', area: 'ENVASES', c: 'ev', desc: 'Envases PRESTADOS que el asesor recuperó de los clientes y entrega vacíos en bodega.' },
   DANO:       { n: '!', titulo: 'Rotos / dañados',            corto: 'Daño',         area: null,        c: 'ed', desc: 'Registra lo que se rompió o dañó. Se descuenta del stock.' },
   AJUSTE:     { n: '±', titulo: 'Ajuste por conteo físico',   corto: 'Ajuste',       area: null,        c: 'ea', desc: 'Escribe lo que contaste físicamente; el sistema registra la diferencia.' }
 };
@@ -83,7 +84,8 @@ const MOTIVOS_DANO = ['ROTO', 'DAÑADO', 'DERRAMADO', 'MAL SELLADO', 'CONTAMINAD
 const S = {
   user: null, perfil: null, nombre: '', roles: [], esAdmin: false, soloLectura: false,
   insumos: [], productos: [], movs: [], asesores: [], usuariosBod: [],
-  tab: 'inicio', form: {}, modo: { CARGA: 'CARGA', DANO: 'INSUMOS', AJUSTE: 'INSUMOS', stock: 'INSUMOS', admin: 'USUARIOS' },
+  tab: 'inicio', form: {}, modo: { CARGA: 'CARGA', PRODUCCION: 'INSUMOS', DANO: 'INSUMOS', AJUSTE: 'INSUMOS', stock: 'INSUMOS', admin: 'USUARIOS' },
+  cuadre: { fecha: '', cache: {}, cargando: false, error: '' },
   hist: { desde: '', hasta: '', etapa: '', q: '', limite: 40 },
   unsubs: [], firma: '', renderPendiente: false, errorReglas: false
 };
@@ -234,7 +236,8 @@ document.addEventListener('focusout', () => {
 
 /* ══════════════════════════ CÁLCULO DE STOCK ══════════════════════════ */
 function calcularStock() {
-  const ins = {}, pt = {};
+  const ins = {}, pt = {}, env = {};
+  const E = n => (env[n] = env[n] || { ret: 0, prod: 0, dano: 0, aj: 0, stock: 0 });
   const I = id => (ins[id] = ins[id] || { rec: 0, prod: 0, dano: 0, aj: 0, stock: 0 });
   const P = n => (pt[n] = pt[n] || { term: 0, carga: 0, dev: 0, dano: 0, aj: 0, stock: 0 });
   for (const m of S.movs) {
@@ -243,18 +246,20 @@ function calcularStock() {
       const q = Number(it.cantidad) || 0;
       switch (m.etapa) {
         case 'RECEPCION': I(it.id).rec += q; break;
-        case 'PRODUCCION': I(it.id).prod += q; break;
+        case 'PRODUCCION': if (m.area === 'ENVASES') E(it.nombre).prod += q; else I(it.id).prod += q; break;
+        case 'RETORNO_ENVASE': E(it.nombre).ret += q; break;
         case 'TERMINADO': P(it.nombre).term += q; break;
         case 'CARGA': P(it.nombre).carga += q; break;
         case 'DEVOLUCION': P(it.nombre).dev += q; break;
-        case 'DANO': if (m.area === 'INSUMOS') I(it.id).dano += q; else P(it.nombre).dano += q; break;
-        case 'AJUSTE': if (m.area === 'INSUMOS') I(it.id).aj += q; else P(it.nombre).aj += q; break;
+        case 'DANO': if (m.area === 'INSUMOS') I(it.id).dano += q; else if (m.area === 'ENVASES') E(it.nombre).dano += q; else P(it.nombre).dano += q; break;
+        case 'AJUSTE': if (m.area === 'INSUMOS') I(it.id).aj += q; else if (m.area === 'ENVASES') E(it.nombre).aj += q; else P(it.nombre).aj += q; break;
       }
     }
   }
   Object.values(ins).forEach(s => s.stock = s.rec - s.prod - s.dano + s.aj);
   Object.values(pt).forEach(s => s.stock = s.term - s.carga + s.dev - s.dano + s.aj);
-  return { ins, pt };
+  Object.values(env).forEach(s => s.stock = s.ret - s.prod - s.dano + s.aj);
+  return { ins, pt, env };
 }
 function insumosActivos() {
   return S.insumos.filter(i => i.activo !== false).sort((a, b) =>
@@ -262,8 +267,10 @@ function insumosActivos() {
 }
 function itemsDeArea(area, stock) {
   if (area === 'INSUMOS') return insumosActivos().map(i => ({ id: i.id, nombre: i.nombre, categoria: i.categoria, stock: stock.ins[i.id]?.stock || 0, minimo: Number(i.minimo) || 0 }));
+  if (area === 'ENVASES') return S.productos.map(p => ({ id: p.nombre, nombre: p.nombre, stock: stock.env[p.nombre]?.stock || 0, minimo: 0 }));
   return S.productos.map(p => ({ id: p.nombre, nombre: p.nombre, stock: stock.pt[p.nombre]?.stock || 0, minimo: 0 }));
 }
+function nombreArea(a) { return a === 'INSUMOS' ? 'Insumos' : a === 'ENVASES' ? 'Envases vacíos' : 'Producto terminado'; }
 
 /* ══════════════════════════ NAVEGACIÓN ══════════════════════════ */
 const SCREENS = {
@@ -275,12 +282,14 @@ const SCREENS = {
   DANO:       { label: '⚠ Daños',           form: true },
   stock:      { label: 'Stock',             render: renderStock },
   historial:  { label: 'Historial',         render: renderHistorial },
+  cuadre:     { label: '⚖ Cuadre camión',   render: renderCuadre, staff: true },
   AJUSTE:     { label: '± Ajuste',          form: true, admin: true },
   admin:      { label: '⚙ Admin',           render: renderAdmin, admin: true }
 };
 function tabsDisponibles() {
   return Object.entries(SCREENS).filter(([id, s]) => {
     if (s.admin) return S.esAdmin;
+    if (s.staff) return S.esAdmin || S.soloLectura;
     if (s.rol) return puede(s.rol);
     if (id === 'DANO') return esPersonalBodega();
     return true;
@@ -335,6 +344,7 @@ function renderInicio() {
     <div class="kpi" style="border-color:var(--e2)"><span>A producción hoy</span><b>${num(tot('PRODUCCION'))}</b><small>unidades de insumos</small></div>
     <div class="kpi" style="border-color:var(--e3)"><span>Terminado hoy</span><b>${num(tot('TERMINADO'))}</b><small>unidades producidas</small></div>
     <div class="kpi" style="border-color:var(--e4)"><span>Cargado hoy</span><b>${num(tot('CARGA') - tot('DEVOLUCION'))}</b><small>neto (carga − devolución)</small></div>
+    <div class="kpi" style="border-color:var(--ev)"><span>Envases recuperados hoy</span><b>${num(tot('RETORNO_ENVASE'))}</b><small>préstamos devueltos</small></div>
     <div class="kpi" style="border-color:var(--ed)"><span>Daños hoy</span><b>${num(tot('DANO'))}</b><small>unidades</small></div>
   </div>
   ${bajos.length ? `<div class="card"><h2 style="color:var(--red)">Insumos en o bajo el mínimo (${bajos.length})</h2>
@@ -349,22 +359,27 @@ function renderInicio() {
 function cfgDe(tab) {
   switch (tab) {
     case 'RECEPCION':  return { key: 'RECEPCION', etapa: 'RECEPCION', area: 'INSUMOS', limitar: false, campos: ['proveedor', 'documento', 'fecha', 'nota'] };
-    case 'PRODUCCION': return { key: 'PRODUCCION', etapa: 'PRODUCCION', area: 'INSUMOS', limitar: true, campos: ['fecha', 'nota'] };
+    case 'PRODUCCION': {
+      const env = S.modo.PRODUCCION === 'ENVASES';
+      return { key: env ? 'PRODUCCION_ENV' : 'PRODUCCION', etapa: 'PRODUCCION', area: env ? 'ENVASES' : 'INSUMOS', limitar: true, campos: ['fecha', 'nota'],
+        seg: { modo: 'PRODUCCION', ops: [['INSUMOS', 'Insumos'], ['ENVASES', 'Envases vacíos']] } };
+    }
     case 'TERMINADO':  return { key: 'TERMINADO', etapa: 'TERMINADO', area: 'TERMINADO', limitar: false, campos: ['fecha', 'nota'] };
     case 'CARGA': {
+      const segC = { modo: 'CARGA', ops: [['CARGA', '4 · Cargar'], ['DEVOLUCION', '↩ Devolución'], ['RETORNO_ENVASE', '♻ Envases']] };
+      if (S.modo.CARGA === 'RETORNO_ENVASE') return { key: 'RETORNO_ENVASE', etapa: 'RETORNO_ENVASE', area: 'ENVASES', limitar: false, campos: ['asesor', 'fecha', 'nota'], seg: segC };
       const dev = S.modo.CARGA === 'DEVOLUCION';
-      return { key: dev ? 'DEVOLUCION' : 'CARGA', etapa: dev ? 'DEVOLUCION' : 'CARGA', area: 'TERMINADO', limitar: !dev, campos: ['asesor', 'fecha', 'nota'],
-        seg: { modo: 'CARGA', ops: [['CARGA', '4 · Cargar camión'], ['DEVOLUCION', '↩ Devolución']] } };
+      return { key: dev ? 'DEVOLUCION' : 'CARGA', etapa: dev ? 'DEVOLUCION' : 'CARGA', area: 'TERMINADO', limitar: !dev, campos: ['asesor', 'fecha', 'nota'], seg: segC };
     }
     case 'DANO': {
       const a = S.modo.DANO;
       return { key: 'DANO_' + a, etapa: 'DANO', area: a, limitar: true, campos: ['motivo', 'fecha', 'nota'],
-        seg: { modo: 'DANO', ops: [['INSUMOS', 'Insumos'], ['TERMINADO', 'Producto terminado']] } };
+        seg: { modo: 'DANO', ops: [['INSUMOS', 'Insumos'], ['TERMINADO', 'P. terminado'], ['ENVASES', 'Envases vacíos']] } };
     }
     case 'AJUSTE': {
       const a = S.modo.AJUSTE;
       return { key: 'AJUSTE_' + a, etapa: 'AJUSTE', area: a, conteo: true, campos: ['fecha', 'nota'],
-        seg: { modo: 'AJUSTE', ops: [['INSUMOS', 'Insumos'], ['TERMINADO', 'Producto terminado']] } };
+        seg: { modo: 'AJUSTE', ops: [['INSUMOS', 'Insumos'], ['TERMINADO', 'P. terminado'], ['ENVASES', 'Envases vacíos']] } };
     }
   }
 }
@@ -374,7 +389,7 @@ function estadoForm(key) {
 }
 function firmaFormulario(tab) {
   const c = cfgDe(tab);
-  const ids = c.area === 'INSUMOS' ? insumosActivos().map(i => i.id + i.nombre) : S.productos.map(p => p.nombre);
+  const ids = c.area === 'INSUMOS' ? insumosActivos().map(i => i.id + i.nombre) : S.productos.map(p => p.nombre + c.area);
   return c.key + '|' + ids.join(',') + '|' + S.asesores.join(',') + '|' + S.errorReglas;
 }
 function refrescarFormulario() {
@@ -425,6 +440,8 @@ function htmlFormulario(tab) {
   let aviso = '';
   if (c.etapa === 'CARGA') aviso = `<div class="msg info">Solo producto lleno que sale de la bodega de terminado. Los envases vacíos de CAMBIO <b>no</b> se registran.</div>`;
   if (c.etapa === 'DEVOLUCION') aviso = `<div class="msg info">Solo producto <b>LLENO</b> que regresa sin vender. Los envases vacíos de CAMBIO <b>no</b> entran al stock.</div>`;
+  if (c.etapa === 'RETORNO_ENVASE') aviso = `<div class="msg info">Solo envases <b>PRESTADOS</b> que el asesor recuperó de los clientes (los que marcó como “devolvió” en la app de pedidos). Entran al stock de <b>envases vacíos</b> para luego ir a producción. Los envases de CAMBIO <b>no</b> se registran.</div>`;
+  if (c.etapa === 'PRODUCCION' && c.area === 'ENVASES') aviso = `<div class="msg info">Envases vacíos (devueltos de préstamos) que pasan a producción para llenarse.</div>`;
   if (c.etapa === 'TERMINADO') aviso = `<div class="msg info">Estos son los mismos productos de la app del asesor. Esta entrada también suma al Inventario del dashboard.</div>`;
   if (c.etapa === 'AJUSTE') aviso = `<div class="msg warn">Escribe solo lo que contaste. Lo que dejes vacío no se toca. ${c.area === 'TERMINADO' ? 'La diferencia también se registra en el Inventario del dashboard.' : ''}</div>`;
   const seg = c.seg ? `<div class="seg" style="margin-bottom:12px">${c.seg.ops.map(([v, l]) => `<button class="${S.modo[c.seg.modo] === v ? 'on' : ''}" onclick="setModo('${c.seg.modo}','${v}')">${esc(l)}</button>`).join('')}</div>` : '';
@@ -451,7 +468,7 @@ function htmlFormulario(tab) {
             </div></div>`;
         }).join('')}</div>`).join('');
   }
-  const soloLect = S.soloLectura || (c.etapa !== 'DANO' && c.etapa !== 'AJUSTE' && !puede(c.etapa === 'DEVOLUCION' ? 'CARGA' : c.etapa));
+  const soloLect = S.soloLectura || (c.etapa !== 'DANO' && c.etapa !== 'AJUSTE' && !puede(c.etapa === 'DEVOLUCION' || c.etapa === 'RETORNO_ENVASE' ? 'CARGA' : c.etapa));
   return `
   <div class="card">
     <div class="step-head"><div class="step-num" style="background:var(--${e.c}bg);color:var(--${e.c})">${esc(e.n)}</div>
@@ -543,7 +560,7 @@ function revisar(tab) {
     : elegidos.map(it => `<tr><td>${esc(it.nombre)}${it.categoria ? `<br><small style="color:var(--muted)">${esc(it.categoria)}</small>` : ''}</td><td class="n"><b>${num(f.qty[it.id])}</b></td></tr>`).join('');
   const total = elegidos.reduce((a, it) => a + (f.qty[it.id] || 0), 0);
   openModal(`
-    <h3>${esc(e.n)} · ${esc(e.titulo)}${c.etapa === 'DANO' || c.etapa === 'AJUSTE' ? ' — ' + (c.area === 'INSUMOS' ? 'Insumos' : 'Producto terminado') : ''}</h3>
+    <h3>${esc(e.n)} · ${esc(e.titulo)}${c.etapa === 'DANO' || c.etapa === 'AJUSTE' || (c.etapa === 'PRODUCCION' && c.area === 'ENVASES') ? ' — ' + nombreArea(c.area) : ''}</h3>
     <div class="mov-meta">Fecha: <b>${fmtFecha(f.campos.fecha)}</b>
       ${f.campos.asesor ? `<br>Asesor: <b style="font-size:16px">${esc(f.campos.asesor)}</b>` : ''}
       ${c.campos.includes('proveedor') ? `<br>Proveedor: <b>${esc(upper(f.campos.proveedor))}</b>${f.campos.documento ? ' · Doc: <b>' + esc(upper(f.campos.documento)) + '</b>' : ''}` : ''}
@@ -624,7 +641,7 @@ function sincronizarDashboard(movId, doc, reversa) {
 /* ══════════════════════════ STOCK ══════════════════════════ */
 function renderStock() {
   const st = calcularStock(), a = S.modo.stock;
-  const seg = `<div class="seg" style="margin-bottom:12px">${[['INSUMOS', 'Insumos'], ['TERMINADO', 'Producto terminado']].map(([v, l]) => `<button class="${a === v ? 'on' : ''}" onclick="S.modo.stock='${v}';renderMain()">${l}</button>`).join('')}</div>`;
+  const seg = `<div class="seg" style="margin-bottom:12px">${[['INSUMOS', 'Insumos'], ['TERMINADO', 'P. terminado'], ['ENVASES', 'Envases vacíos']].map(([v, l]) => `<button class="${a === v ? 'on' : ''}" onclick="S.modo.stock='${v}';renderMain()">${l}</button>`).join('')}</div>`;
   let cuerpo;
   if (a === 'INSUMOS') {
     const items = insumosActivos();
@@ -638,6 +655,15 @@ function renderStock() {
             return `<tr class="${low ? 'low' : ''}"><td><b>${esc(i.nombre)}</b></td><td class="n">${num(s.rec)}</td><td class="n">${num(s.prod)}</td><td class="n">${num(s.dano)}</td><td class="n">${s.aj ? (s.aj > 0 ? '+' : '') + num(s.aj) : '0'}</td><td class="n" style="font-weight:800;color:${low ? 'var(--red)' : 'var(--text)'}">${num(s.stock)}</td><td class="n">${i.minimo ? num(i.minimo) : '-'}</td></tr>`; }).join('')}
           </tbody></table></div></div>`;
       }).join('') : '<div class="card empty">No hay catálogo de insumos todavía.</div>');
+  } else if (a === 'ENVASES') {
+    const nombres = [...new Set([...Object.keys(st.env)])].sort();
+    const total = nombres.reduce((x, n) => x + (st.env[n]?.stock || 0), 0);
+    cuerpo = `<div class="kpis"><div class="kpi" style="border-color:var(--ev)"><span>Envases vacíos en bodega</span><b>${num(total)}</b><small>de préstamos recuperados</small></div></div>
+      <div class="card"><h2>Envases vacíos</h2><p class="hint">Envases prestados que los asesores recuperaron de clientes. En bodega = recuperados − a producción − dañados ± ajuste. Los envases de CAMBIO no se cuentan.</p>
+      ${nombres.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Envase</th><th class="n">Recuperados</th><th class="n">A producción</th><th class="n">Dañados</th><th class="n">Ajuste</th><th class="n">En bodega</th></tr></thead><tbody>
+      ${nombres.map(n => { const e = st.env[n];
+        return `<tr class="${e.stock < 0 ? 'low' : ''}"><td><b>${esc(n)}</b></td><td class="n">${num(e.ret)}</td><td class="n">${num(e.prod)}</td><td class="n">${num(e.dano)}</td><td class="n">${e.aj ? (e.aj > 0 ? '+' : '') + num(e.aj) : '0'}</td><td class="n" style="font-weight:800">${num(e.stock)}</td></tr>`; }).join('')}
+      </tbody></table></div>` : '<div class="empty">Todavía no hay envases recuperados.</div>'}</div>`;
   } else {
     const nombres = [...new Set([...S.productos.map(p => p.nombre), ...Object.keys(st.pt)])].sort();
     const total = nombres.reduce((a, n) => a + (st.pt[n]?.stock || 0), 0);
@@ -659,7 +685,7 @@ function movsFiltrados() {
     .sort((a, b) => (b.fecha || '').localeCompare(a.fecha || '') || msDe(b) - msDe(a));
 }
 function htmlMov(m, sinAcciones) {
-  const area = (m.etapa === 'DANO' || m.etapa === 'AJUSTE') ? ` <span class="badge" style="background:var(--soft);color:var(--muted)">${m.area === 'INSUMOS' ? 'Insumos' : 'Terminado'}</span>` : '';
+  const area = (m.etapa === 'DANO' || m.etapa === 'AJUSTE' || (m.etapa === 'PRODUCCION' && m.area === 'ENVASES')) ? ` <span class="badge" style="background:var(--soft);color:var(--muted)">${nombreArea(m.area)}</span>` : '';
   const meta = [
     m.ruta ? `Asesor: <b>${esc(m.ruta)}</b>` : '',
     m.proveedor ? `Proveedor: <b>${esc(m.proveedor)}</b>${m.documento ? ' · Doc ' + esc(m.documento) : ''}` : '',
@@ -711,12 +737,12 @@ function pedirAnular(id) {
   const m = S.movs.find(x => x._id === id); if (!m) return;
   /* Si se anula una ENTRADA, avisa qué ítems quedarían en negativo */
   let avisoNeg = '';
-  const entrada = ['RECEPCION', 'TERMINADO', 'DEVOLUCION'].includes(m.etapa) || (m.etapa === 'AJUSTE');
+  const entrada = ['RECEPCION', 'TERMINADO', 'DEVOLUCION', 'RETORNO_ENVASE'].includes(m.etapa) || (m.etapa === 'AJUSTE');
   if (entrada) {
     const st = calcularStock();
     const neg = (m.items || []).filter(i => {
       const q = Number(i.cantidad) || 0; if (q <= 0) return false;
-      const s = m.area === 'INSUMOS' ? (st.ins[i.id]?.stock || 0) : (st.pt[i.nombre]?.stock || 0);
+      const s = m.area === 'INSUMOS' ? (st.ins[i.id]?.stock || 0) : m.area === 'ENVASES' ? (st.env[i.nombre]?.stock || 0) : (st.pt[i.nombre]?.stock || 0);
       return s - q < 0;
     });
     if (neg.length) avisoNeg = `<div class="msg err">Al anular, quedarían en negativo: ${neg.map(i => esc(i.nombre)).join(', ')} (esa mercadería ya salió). Revisa antes de continuar.</div>`;
@@ -741,7 +767,7 @@ function imprimirMov(id) {
   const m = S.movs.find(x => x._id === id); if (!m) { toast('Espera un momento y vuelve a intentar.'); return; }
   const e = ETAPAS[m.etapa] || {};
   const filas = (m.items || []).map(i => `<tr><td>${esc(i.nombre)}${i.categoria ? ' <i>(' + esc(i.categoria) + ')</i>' : ''}</td><td class="r">${m.etapa === 'AJUSTE' && i.cantidad > 0 ? '+' : ''}${num(i.cantidad)}</td></tr>`).join('');
-  const firmas = m.etapa === 'CARGA' ? ['ENTREGA BODEGA', 'RECIBE ASESOR'] : m.etapa === 'DEVOLUCION' ? ['ENTREGA ASESOR', 'RECIBE BODEGA'] : m.etapa === 'RECEPCION' ? ['ENTREGA PROVEEDOR', 'RECIBE BODEGA'] : ['RESPONSABLE'];
+  const firmas = m.etapa === 'CARGA' ? ['ENTREGA BODEGA', 'RECIBE ASESOR'] : (m.etapa === 'DEVOLUCION' || m.etapa === 'RETORNO_ENVASE') ? ['ENTREGA ASESOR', 'RECIBE BODEGA'] : m.etapa === 'RECEPCION' ? ['ENTREGA PROVEEDOR', 'RECIBE BODEGA'] : ['RESPONSABLE'];
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>Comprobante</title><style>
     @page{size:58mm auto;margin:2mm}*{margin:0;padding:0}body{width:48mm;font:12px/1.35 Arial,sans-serif;color:#000}
     h1{font-size:15px;text-align:center}h2{font-size:12px;text-align:center;margin:2px 0 4px}.c{text-align:center}
@@ -751,7 +777,7 @@ function imprimirMov(id) {
     <h1>AQUA LUAN</h1><h2>BODEGA · ${esc((e.titulo || m.etapa).toUpperCase())}</h2>
     <div>Fecha: <b>${fmtFecha(m.fecha)}</b> ${fmtHora(msDe(m))}</div><div>N°: ${esc(m._id.slice(0, 8).toUpperCase())}</div>
     ${m.ruta ? `<div>Asesor: <b>${esc(m.ruta)}</b></div>` : ''}${m.proveedor ? `<div>Proveedor: <b>${esc(m.proveedor)}</b></div>` : ''}${m.documento ? `<div>Doc: ${esc(m.documento)}</div>` : ''}
-    ${m.motivo ? `<div>Motivo: ${esc(m.motivo)}</div>` : ''}${m.area && (m.etapa === 'DANO' || m.etapa === 'AJUSTE') ? `<div>Área: ${m.area === 'INSUMOS' ? 'INSUMOS' : 'PRODUCTO TERMINADO'}</div>` : ''}
+    ${m.motivo ? `<div>Motivo: ${esc(m.motivo)}</div>` : ''}${m.area && (m.etapa === 'DANO' || m.etapa === 'AJUSTE' || m.area === 'ENVASES') ? `<div>Área: ${nombreArea(m.area).toUpperCase()}</div>` : ''}
     <div>Registró: ${esc(m.creadoPorNombre || '')}</div>${m.anulado ? '<div><b>*** ANULADO ***</b></div>' : ''}
     <hr><table>${filas}</table><hr>${m.totalUnidades ? `<table><tr><td><b>TOTAL</b></td><td class="r">${num(m.totalUnidades)}</td></tr></table>` : ''}
     ${m.nota ? `<div>Obs.: ${esc(m.nota)}</div>` : ''}
@@ -760,6 +786,87 @@ function imprimirMov(id) {
   const w = window.open('', '_blank');
   if (!w) { alert('El navegador bloqueó la ventana de impresión. Permite ventanas emergentes para esta app.'); return; }
   w.document.open(); w.document.write(html); w.document.close();
+}
+
+/* ══════════════════════════ CUADRE DEL CAMIÓN (admin / secretaria) ══════════════════════════
+   Por asesor y día. Solo LEE: pedidos y envasesPrestamos (app del asesor) + bodMovimientos.
+   Producto:  cargado − vendido (incluye regalías) = debe regresar; diferencia = devuelto − debe regresar.
+   Envases:   recuperados de clientes (app pedidos) vs. entregados en bodega (♻ retorno). */
+async function cargarCuadre(fecha, forzar) {
+  const C = S.cuadre;
+  if (!forzar && C.cache[fecha]) return;
+  C.cargando = true; C.error = ''; renderMain();
+  try {
+    const [ped, env] = await Promise.all([
+      db.collection('pedidos').where('fecha', '==', fecha).get(),
+      db.collection('envasesPrestamos').where('fecha', '==', fecha).get().catch(e => { console.warn('envasesPrestamos', e); return { docs: [] }; })
+    ]);
+    C.cache[fecha] = { pedidos: ped.docs.map(d => d.data()), envases: env.docs.map(d => d.data()), hora: Date.now() };
+  } catch (e) {
+    console.error(e); C.error = e.code === 'permission-denied' ? 'Sin permiso para leer pedidos (solo administrador o secretaria).' : (e.message || 'Error al cargar');
+  }
+  C.cargando = false; renderMain();
+}
+function datosCuadre(fecha) {
+  const d = S.cuadre.cache[fecha]; if (!d) return null;
+  const R = {};
+  const A = r => (R[r] = R[r] || { prod: {}, env: {}, pedidos: 0 });
+  const P = (r, n) => (A(r).prod[n] = A(r).prod[n] || { carga: 0, vend: 0, dev: 0 });
+  const V = (r, n) => (A(r).env[n] = A(r).env[n] || { prest: 0, recup: 0, entreg: 0 });
+  S.movs.filter(m => !m.anulado && m.fecha === fecha && m.ruta).forEach(m => (m.items || []).forEach(it => {
+    const q = Number(it.cantidad) || 0;
+    if (m.etapa === 'CARGA') P(m.ruta, it.nombre).carga += q;
+    if (m.etapa === 'DEVOLUCION') P(m.ruta, it.nombre).dev += q;
+    if (m.etapa === 'RETORNO_ENVASE') V(m.ruta, it.nombre).entreg += q;
+  }));
+  d.pedidos.forEach(p => {
+    if (!p.empleado) return; A(p.empleado).pedidos++;
+    (p.productos || []).forEach(x => {
+      P(p.empleado, x.nombre).vend += Number(x.cantidad) || 0;
+      (x.regalias || []).forEach(g => { P(p.empleado, g.nombre).vend += Number(g.cantidad) || 0; });
+    });
+  });
+  d.envases.filter(e => !e.anulado && e.empleado).forEach(e => {
+    if (e.tipo === 'PRESTAMO') V(e.empleado, e.envase).prest += Number(e.cantidad) || 0;
+    if (e.tipo === 'DEVOLUCION') V(e.empleado, e.envase).recup += Number(e.cantidad) || 0;
+  });
+  return R;
+}
+function renderCuadre() {
+  const C = S.cuadre; if (!C.fecha) C.fecha = hoy();
+  if (!C.cache[C.fecha] && !C.cargando && !C.error) setTimeout(() => cargarCuadre(C.fecha), 0);
+  const R = datosCuadre(C.fecha);
+  const dif = n => n === 0 ? `<span class="badge" style="background:var(--okbg);color:var(--ok)">✓ cuadra</span>`
+    : n < 0 ? `<span class="badge" style="background:var(--redbg);color:var(--red)">faltan ${num(-n)}</span>`
+    : `<span class="badge" style="background:var(--amberbg);color:var(--amber)">sobran ${num(n)}</span>`;
+  let cuerpo = '';
+  if (C.cargando) cuerpo = '<div class="card empty">Cargando pedidos del día…</div>';
+  else if (C.error) cuerpo = `<div class="msg err">${esc(C.error)}</div>`;
+  else if (R) {
+    const rutas = Object.keys(R).sort();
+    let faltantes = 0;
+    cuerpo = rutas.length ? rutas.map(r => {
+      const a = R[r];
+      const prods = Object.entries(a.prod).filter(([, x]) => x.carga || x.vend || x.dev).sort(([x], [y]) => x.localeCompare(y));
+      const envs = Object.entries(a.env).filter(([, x]) => x.prest || x.recup || x.entreg).sort(([x], [y]) => x.localeCompare(y));
+      prods.forEach(([, x]) => { if ((x.dev - (x.carga - x.vend)) !== 0) faltantes++; });
+      envs.forEach(([, x]) => { if (x.entreg - x.recup !== 0) faltantes++; });
+      return `<div class="card"><h2>${esc(r)}</h2><p class="hint">${a.pedidos} pedido(s) registrados en la app ese día.</p>
+        ${prods.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Producto</th><th class="n">Cargado</th><th class="n">Vendido*</th><th class="n">Debe regresar</th><th class="n">Devolvió</th><th>Resultado</th></tr></thead><tbody>
+          ${prods.map(([n, x]) => { const debe = x.carga - x.vend; return `<tr><td><b>${esc(n)}</b></td><td class="n">${num(x.carga)}</td><td class="n">${num(x.vend)}</td><td class="n">${num(debe)}</td><td class="n">${num(x.dev)}</td><td>${dif(x.dev - debe)}</td></tr>`; }).join('')}
+        </tbody></table></div>` : '<div class="empty">Sin carga ni ventas de producto.</div>'}
+        ${envs.length ? `<h2 style="margin-top:14px">♻ Envases prestados</h2><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Envase</th><th class="n">Prestó hoy</th><th class="n">Recuperó de clientes</th><th class="n">Entregó en bodega</th><th>Resultado</th></tr></thead><tbody>
+          ${envs.map(([n, x]) => `<tr><td><b>${esc(n)}</b></td><td class="n">${num(x.prest)}</td><td class="n">${num(x.recup)}</td><td class="n">${num(x.entreg)}</td><td>${dif(x.entreg - x.recup)}</td></tr>`).join('')}
+        </tbody></table></div>` : ''}
+      </div>`;
+    }).join('') + '' : '<div class="card empty">No hay cargas, ventas ni envases ese día.</div>';
+    if (rutas.length) cuerpo = `<div class="msg ${faltantes ? 'warn' : 'ok'}">${faltantes ? `Hay ${faltantes} línea(s) que no cuadran. Revisa con el asesor antes de cerrar el día.` : 'Todo cuadra para este día.'}</div>` + cuerpo;
+  }
+  return `<div class="card"><h2>Cuadre del camión</h2>
+    <p class="hint">Compara lo que se cargó al camión con lo que el asesor vendió en la app de pedidos y lo que devolvió a bodega. *Vendido incluye las regalías. “Faltan” = no regresó a bodega; “sobran” = regresó más de lo esperado (posible venta sin registrar).</p>
+    <div class="grid2"><div><label class="lbl">Día</label><input class="in" type="date" value="${C.fecha}" max="${hoy()}" onchange="S.cuadre.fecha=this.value;S.cuadre.error='';cargarCuadre(this.value)"></div>
+      <div style="display:flex;align-items:flex-end"><button class="btn btn-out" onclick="cargarCuadre(S.cuadre.fecha,true)">↻ Actualizar ventas</button></div></div>
+  </div>${cuerpo}`;
 }
 
 /* ══════════════════════════ ADMIN ══════════════════════════ */
