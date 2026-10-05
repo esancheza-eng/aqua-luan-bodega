@@ -649,15 +649,23 @@ function renderStock() {
   if (a === 'INSUMOS') {
     const items = insumosActivos();
     const bajos = items.filter(i => (Number(i.minimo) || 0) > 0 && (st.ins[i.id]?.stock || 0) <= i.minimo).length;
+    // Totales (solo suman lo que ya se muestra en cada fila; no cambian ninguna fórmula)
+    const sumar = arr => arr.reduce((t, i) => { const s = st.ins[i.id] || { rec: 0, prod: 0, dano: 0, aj: 0, stock: 0 }; t.rec += s.rec; t.prod += s.prod; t.dano += s.dano; t.aj += s.aj; t.stock += s.stock; return t; }, { rec: 0, prod: 0, dano: 0, aj: 0, stock: 0 });
+    const fmtAj = v => v ? (v > 0 ? '+' : '') + num(v) : '0';
+    const totCat = CATEGORIAS.map(cat => ({ cat, arr: items.filter(i => i.categoria === cat) })).filter(x => x.arr.length).map(x => ({ cat: x.cat, t: sumar(x.arr) }));
+    const totGen = sumar(items);
     cuerpo = `<div class="kpis"><div class="kpi"><span>Ítems de insumos</span><b>${items.length}</b></div>
-      <div class="kpi" style="border-color:var(--red)"><span>En o bajo mínimo</span><b>${bajos}</b></div></div>` +
+      <div class="kpi" style="border-color:var(--red)"><span>En o bajo mínimo</span><b>${bajos}</b></div>
+      <div class="kpi"><span>Stock total de insumos</span><b>${num(totGen.stock)}</b><small>${totCat.map(x => esc(x.cat) + ': ' + num(x.t.stock)).join(' · ')}</small></div></div>` +
       (items.length ? CATEGORIAS.map(cat => {
         const arr = items.filter(i => i.categoria === cat); if (!arr.length) return '';
         return `<div class="card"><h2>${cat}</h2><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Ítem</th><th class="n">Recibido</th><th class="n">A prod.</th><th class="n">Dañado</th><th class="n">Ajuste</th><th class="n">Stock</th><th class="n">Mín.</th></tr></thead><tbody>
           ${arr.map(i => { const s = st.ins[i.id] || { rec: 0, prod: 0, dano: 0, aj: 0, stock: 0 }; const low = (i.minimo > 0 && s.stock <= i.minimo) || s.stock < 0;
             return `<tr class="${low ? 'low' : ''}"><td><b>${esc(i.nombre)}</b></td><td class="n">${num(s.rec)}</td><td class="n">${num(s.prod)}</td><td class="n">${num(s.dano)}</td><td class="n">${s.aj ? (s.aj > 0 ? '+' : '') + num(s.aj) : '0'}</td><td class="n" style="font-weight:800;color:${low ? 'var(--red)' : 'var(--text)'}">${num(s.stock)}</td><td class="n">${i.minimo ? num(i.minimo) : '-'}</td></tr>`; }).join('')}
-          </tbody></table></div></div>`;
-      }).join('') : '<div class="card empty">No hay catálogo de insumos todavía.</div>');
+          </tbody>${(() => { const t = sumar(arr); return `<tfoot><tr class="tot"><td>TOTAL ${esc(cat)}</td><td class="n">${num(t.rec)}</td><td class="n">${num(t.prod)}</td><td class="n">${num(t.dano)}</td><td class="n">${fmtAj(t.aj)}</td><td class="n">${num(t.stock)}</td><td class="n"></td></tr></tfoot>`; })()}</table></div></div>`;
+      }).join('') + `<div class="card"><h2>Total general de insumos</h2><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Categoría</th><th class="n">Recibido</th><th class="n">A prod.</th><th class="n">Dañado</th><th class="n">Ajuste</th><th class="n">Stock</th></tr></thead><tbody>
+          ${totCat.map(x => `<tr><td><b>${esc(x.cat)}</b></td><td class="n">${num(x.t.rec)}</td><td class="n">${num(x.t.prod)}</td><td class="n">${num(x.t.dano)}</td><td class="n">${fmtAj(x.t.aj)}</td><td class="n" style="font-weight:800">${num(x.t.stock)}</td></tr>`).join('')}
+          </tbody><tfoot><tr class="tot"><td>TOTAL GENERAL</td><td class="n">${num(totGen.rec)}</td><td class="n">${num(totGen.prod)}</td><td class="n">${num(totGen.dano)}</td><td class="n">${fmtAj(totGen.aj)}</td><td class="n">${num(totGen.stock)}</td></tr></tfoot></table></div></div>` : '<div class="card empty">No hay catálogo de insumos todavía.</div>');
   } else if (a === 'ENVASES') {
     const nombres = [...new Set([...Object.keys(st.env)])].sort();
     const total = nombres.reduce((x, n) => x + (st.env[n]?.stock || 0), 0);
