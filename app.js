@@ -42,7 +42,7 @@ const _secApp = firebase.initializeApp(firebaseConfig, 'secundariaBodega');
 const _secAuth = _secApp.auth();
 const TS = () => firebase.firestore.FieldValue.serverTimestamp();
 
-const APP_VERSION = 'bodega-3.1.3';
+const APP_VERSION = 'bodega-3.1.4';
 const DOMINIO_LOGIN = '@luanaqua.app';
 function emailDeUsuario(u) {
   const limpio = String(u || '').trim().toLowerCase().replace(/[^a-z0-9._-]/g, '');
@@ -613,7 +613,7 @@ function confirmarGuardar(tab) {
   openModal(`<h3>✓ Guardado</h3>
     <div class="msg ${offline ? 'warn' : 'ok'}">${offline ? 'Estás sin internet: quedó guardado en este celular y se enviará solo al volver la conexión. No cierres sesión.' : 'Registro enviado.'}</div>
     <div class="mov-meta">${esc(ETAPAS[c.etapa].titulo)} · ${items.length} ítem(s)${doc.totalUnidades ? ' · ' + num(doc.totalUnidades) + ' unidades' : ''}${doc.ruta ? '<br>Asesor: <b>' + esc(doc.ruta) + '</b>' : ''}</div>
-    <div class="actions"><button class="btn btn-out" style="flex:1" onclick="imprimirMov('${ref.id}')">🖨 Imprimir comprobante</button>
+    <div class="actions"><button class="btn btn-out" style="flex:1" onclick="elegirImpresion('${ref.id}')">🖨 Imprimir comprobante</button>
       <button class="btn btn-main" style="flex:1" onclick="closeModal()">Listo</button></div>`);
 }
 
@@ -704,7 +704,7 @@ function htmlMov(m, sinAcciones) {
     <div class="mov-meta">${meta}</div>
     <div class="mov-items">${chips}</div>
     ${sinAcciones ? '' : `<div class="actions" style="margin-top:8px">
-      <button class="btn btn-out btn-sm" onclick="imprimirMov('${m._id}')">🖨 Imprimir</button>
+      <button class="btn btn-out btn-sm" onclick="elegirImpresion('${m._id}')">🖨 Imprimir</button>
       ${S.esAdmin && !m.anulado ? `<button class="btn btn-out btn-sm" style="color:var(--red)" onclick="pedirAnular('${m._id}')">Anular</button>` : ''}
     </div>`}</div>`;
 }
@@ -790,6 +790,54 @@ function imprimirMov(id) {
     <hr><table>${filas}</table><hr>${m.totalUnidades ? `<table><tr><td><b>TOTAL</b></td><td class="r">${num(m.totalUnidades)}</td></tr></table>` : ''}
     ${m.nota ? `<div>Obs.: ${esc(m.nota)}</div>` : ''}
     ${firmas.map(([t, n]) => `<div class="f"><b>${esc(n || ' ')}</b>${t}</div>`).join('')}<br><div class="c">.</div>
+    <script>window.onload=function(){setTimeout(function(){window.print()},300)}<\/script></body></html>`;
+  const w = window.open('', '_blank');
+  if (!w) { alert('El navegador bloqueó la ventana de impresión. Permite ventanas emergentes para esta app.'); return; }
+  w.document.open(); w.document.write(html); w.document.close();
+}
+
+/* ── Selector de impresión: ticket térmico 58 mm o PDF / impresión normal A4 ── */
+function elegirImpresion(id) {
+  openModal(`<h3>🖨 Imprimir comprobante</h3>
+    <div class="actions" style="flex-direction:column;gap:8px">
+      <button class="btn btn-main btn-block" onclick="closeModal();imprimirMov('${id}')">🧾 Ticket térmico (58 mm)</button>
+      <button class="btn btn-out btn-block" onclick="closeModal();imprimirMovPDF('${id}')">📄 PDF / Impresión normal (A4)</button>
+      <button class="btn btn-out btn-block" onclick="closeModal()">Cancelar</button></div>`);
+}
+
+/* ── Comprobante PDF / impresión normal A4 ──────────────────────────── */
+function imprimirMovPDF(id) {
+  const m = S.movs.find(x => x._id === id); if (!m) { toast('Espera un momento y vuelve a intentar.'); return; }
+  const e = ETAPAS[m.etapa] || {};
+  const filas = (m.items || []).map((i, k) => `<tr><td class="c">${k + 1}</td><td>${esc(i.nombre)}</td><td>${esc(i.categoria || '')}</td><td class="r">${m.etapa === 'AJUSTE' && i.cantidad > 0 ? '+' : ''}${num(i.cantidad)}</td></tr>`).join('');
+  const quien = m.creadoPorNombre || '', ase = nombreRuta(m.ruta);
+  const firmas = m.etapa === 'CARGA' ? [['ENTREGA BODEGA', quien], ['RECIBE ASESOR', ase]]
+    : (m.etapa === 'DEVOLUCION' || m.etapa === 'RETORNO_ENVASE') ? [['ENTREGA ASESOR', ase], ['RECIBE BODEGA', quien]]
+    : m.etapa === 'RECEPCION' ? [['ENTREGA PROVEEDOR', m.proveedor || ''], ['RECIBE BODEGA', quien]]
+    : [['RESPONSABLE', quien]];
+  const dato = (l, v) => v ? `<div class="d"><span>${l}</span><b>${v}</b></div>` : '';
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Comprobante ${esc(m._id.slice(0, 8).toUpperCase())}</title><style>
+    @page{size:A4;margin:15mm}*{margin:0;padding:0;box-sizing:border-box}body{font:13px/1.45 Arial,sans-serif;color:#000}
+    .head{display:flex;align-items:center;justify-content:space-between;border-bottom:2px solid #0b4f4a;padding-bottom:10px;margin-bottom:14px}
+    .logo{height:60px;width:auto}.tt{text-align:right}.tt h1{font-size:18px;color:#0b4f4a}.tt h2{font-size:14px;font-weight:normal;margin-top:2px}
+    .datos{display:grid;grid-template-columns:1fr 1fr;gap:6px 24px;margin-bottom:16px}.d span{display:block;font-size:10px;color:#555;text-transform:uppercase;letter-spacing:.04em}.d b{font-size:13px}
+    table{width:100%;border-collapse:collapse}th{background:#0b4f4a;color:#fff;font-size:11px;text-transform:uppercase;text-align:left;padding:6px 8px}
+    td{border-bottom:1px solid #ccc;padding:6px 8px;vertical-align:top}.c{text-align:center;width:36px}.r{text-align:right;font-weight:bold;white-space:nowrap;width:110px}th.r{text-align:right}
+    .tot td{border-top:2px solid #000;border-bottom:0;font-weight:bold;font-size:14px}.obs{margin-top:12px}.anul{margin:10px 0;padding:6px;border:2px solid #b00;color:#b00;text-align:center;font-weight:bold}
+    .firmas{display:flex;gap:40px;margin-top:70px}.f{flex:1;border-top:1px solid #000;text-align:center;font-size:11px;padding-top:4px}.f b{display:block;font-size:13px}
+    .pie{margin-top:30px;font-size:10px;color:#777;text-align:center}
+    </style></head><body>
+    <div class="head"><img class="logo" src="${new URL('logo-luanaqua.png', location.href).href}" alt="AQUA LUAN" onerror="this.outerHTML='<h1>AQUA LUAN</h1>'">
+      <div class="tt"><h1>BODEGA · ${esc((e.titulo || m.etapa).toUpperCase())}</h1><h2>Comprobante N° ${esc(m._id.slice(0, 8).toUpperCase())}</h2></div></div>
+    ${m.anulado ? '<div class="anul">*** ANULADO ***</div>' : ''}
+    <div class="datos">${dato('Fecha', fmtFecha(m.fecha) + ' ' + fmtHora(msDe(m)))}${dato('Registró', esc(m.creadoPorNombre || ''))}
+      ${dato('Asesor', m.ruta ? esc(m.ruta) : '')}${dato('Proveedor', m.proveedor ? esc(m.proveedor) : '')}${dato('Documento', m.documento ? esc(m.documento) : '')}
+      ${dato('Motivo', m.motivo ? esc(m.motivo) : '')}${dato('Área', m.area && (m.etapa === 'DANO' || m.etapa === 'AJUSTE' || m.area === 'ENVASES') ? nombreArea(m.area).toUpperCase() : '')}</div>
+    <table><thead><tr><th class="c">#</th><th>Ítem</th><th>Categoría</th><th class="r">Cantidad</th></tr></thead><tbody>${filas}</tbody>
+    ${m.totalUnidades ? `<tfoot><tr class="tot"><td></td><td colspan="2">TOTAL</td><td class="r">${num(m.totalUnidades)}</td></tr></tfoot>` : ''}</table>
+    ${m.nota ? `<div class="obs"><b>Obs.:</b> ${esc(m.nota)}</div>` : ''}
+    <div class="firmas">${firmas.map(([t, n]) => `<div class="f"><b>${esc(n || ' ')}</b>${t}</div>`).join('')}</div>
+    <div class="pie">Aqua Luan · Bodega</div>
     <script>window.onload=function(){setTimeout(function(){window.print()},300)}<\/script></body></html>`;
   const w = window.open('', '_blank');
   if (!w) { alert('El navegador bloqueó la ventana de impresión. Permite ventanas emergentes para esta app.'); return; }
