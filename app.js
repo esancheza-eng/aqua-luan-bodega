@@ -42,7 +42,7 @@ const _secApp = firebase.initializeApp(firebaseConfig, 'secundariaBodega');
 const _secAuth = _secApp.auth();
 const TS = () => firebase.firestore.FieldValue.serverTimestamp();
 
-const APP_VERSION = 'bodega-3.1.4';
+const APP_VERSION = 'bodega-3.1.5';
 const DOMINIO_LOGIN = '@luanaqua.app';
 function emailDeUsuario(u) {
   const limpio = String(u || '').trim().toLowerCase().replace(/[^a-z0-9._-]/g, '');
@@ -354,7 +354,7 @@ function renderInicio() {
     <div class="mov-items" style="margin-top:8px">${bajos.map(i => `<span class="chip">${esc(i.categoria)} · ${esc(i.nombre)}: <b>${num(i.stock)}</b> / mín ${num(i.minimo)}</span>`).join('')}</div></div>` : ''}
   ${negativos.length ? `<div class="msg err">Hay ${negativos.length} ítem(s) con stock negativo — revisa el historial o haz un ajuste por conteo físico.</div>` : ''}
   <div class="card"><h2>Movimientos de hoy</h2>
-    ${ultimos.length ? ultimos.map(htmlMov).join('') + `<button class="btn btn-out btn-sm" onclick="irA('historial')">Ver historial completo</button>` : `<div class="empty">Todavía no hay movimientos hoy.</div>`}
+    ${ultimos.length ? ultimos.map(m => htmlMov(m)).join('') + `<button class="btn btn-out btn-sm" onclick="irA('historial')">Ver historial completo</button>` : `<div class="empty">Todavía no hay movimientos hoy.</div>`}
   </div>`;
 }
 
@@ -722,7 +722,7 @@ function renderHistorial() {
     <div class="actions"><span class="hint" style="margin:auto 0;flex:1">${lista.length} movimiento(s)</span>
       <button class="btn btn-out btn-sm" onclick="exportarCSV()">⬇ Exportar CSV</button></div>
   </div>
-  ${vis.length ? vis.map(htmlMov).join('') : '<div class="card empty">Sin movimientos con esos filtros.</div>'}
+  ${vis.length ? vis.map(m => htmlMov(m)).join('') : '<div class="card empty">Sin movimientos con esos filtros.</div>'}
   ${lista.length > vis.length ? `<button class="btn btn-out btn-block" onclick="S.hist.limite+=40;renderMain()">Mostrar más (${lista.length - vis.length})</button>` : ''}`;
 }
 function exportarCSV() {
