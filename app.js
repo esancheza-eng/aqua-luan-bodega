@@ -652,12 +652,12 @@ function renderStock() {
     // Totales (solo suman lo que ya se muestra en cada fila; no cambian ninguna fórmula)
     const sumar = arr => arr.reduce((t, i) => { const s = st.ins[i.id] || { rec: 0, prod: 0, dano: 0, aj: 0, stock: 0 }; t.rec += s.rec; t.prod += s.prod; t.dano += s.dano; t.aj += s.aj; t.stock += s.stock; return t; }, { rec: 0, prod: 0, dano: 0, aj: 0, stock: 0 });
     const fmtAj = v => v ? (v > 0 ? '+' : '') + num(v) : '0';
+    const sumMin = arr => arr.reduce((t, i) => t + (Number(i.minimo) || 0), 0);
     const totCat = CATEGORIAS.map(cat => ({ cat, arr: items.filter(i => i.categoria === cat) })).filter(x => x.arr.length).map(x => ({ cat: x.cat, t: sumar(x.arr) }));
     const totGen = sumar(items);
     const recibidos = items.filter(i => (st.ins[i.id]?.rec || 0) > 0).length;
     cuerpo = `<div class="actions" style="justify-content:flex-end;margin:0 0 10px"><button class="btn btn-out" onclick="imprimirStockPDF()">📄 Imprimir PDF</button></div>
-      <div class="kpis"><div class="kpi"><span>Ítems de insumos</span><b>${items.length}</b></div>
-      <div class="kpi"><span>Ítems de insumos recibidos</span><b>${recibidos}</b><small>${num(totGen.rec)} unidades recibidas</small></div>
+      <div class="kpis"><div class="kpi"><span>Ítems de insumos recibidos</span><b>${num(totGen.rec)}</b></div>
       <div class="kpi" style="border-color:var(--red)"><span>En o bajo mínimo</span><b>${bajos}</b></div>
       <div class="kpi"><span>Stock total de insumos</span><b>${num(totGen.stock)}</b><small>${totCat.map(x => esc(x.cat) + ': ' + num(x.t.stock)).join(' · ')}</small></div></div>` +
       (items.length ? CATEGORIAS.map(cat => {
@@ -665,10 +665,10 @@ function renderStock() {
         return `<div class="card"><h2>${cat}</h2><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Ítem</th><th class="n">Recibido</th><th class="n">A prod.</th><th class="n">Dañado</th><th class="n">Ajuste</th><th class="n">Stock</th><th class="n">Mín.</th></tr></thead><tbody>
           ${arr.map(i => { const s = st.ins[i.id] || { rec: 0, prod: 0, dano: 0, aj: 0, stock: 0 }; const low = (i.minimo > 0 && s.stock <= i.minimo) || s.stock < 0;
             return `<tr class="${low ? 'low' : ''}"><td><b>${esc(i.nombre)}</b></td><td class="n">${num(s.rec)}</td><td class="n">${num(s.prod)}</td><td class="n">${num(s.dano)}</td><td class="n">${s.aj ? (s.aj > 0 ? '+' : '') + num(s.aj) : '0'}</td><td class="n" style="font-weight:800;color:${low ? 'var(--red)' : 'var(--text)'}">${num(s.stock)}</td><td class="n">${i.minimo ? num(i.minimo) : '-'}</td></tr>`; }).join('')}
-          </tbody>${(() => { const t = sumar(arr); return `<tfoot><tr class="tot"><td>TOTAL ${esc(cat)}</td><td class="n">${num(t.rec)}</td><td class="n">${num(t.prod)}</td><td class="n">${num(t.dano)}</td><td class="n">${fmtAj(t.aj)}</td><td class="n">${num(t.stock)}</td><td class="n"></td></tr></tfoot>`; })()}</table></div></div>`;
-      }).join('') + `<div class="card"><h2>Total general de insumos</h2><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Categoría</th><th class="n">Recibido</th><th class="n">A prod.</th><th class="n">Dañado</th><th class="n">Ajuste</th><th class="n">Stock</th></tr></thead><tbody>
-          ${totCat.map(x => `<tr><td><b>${esc(x.cat)}</b></td><td class="n">${num(x.t.rec)}</td><td class="n">${num(x.t.prod)}</td><td class="n">${num(x.t.dano)}</td><td class="n">${fmtAj(x.t.aj)}</td><td class="n" style="font-weight:800">${num(x.t.stock)}</td></tr>`).join('')}
-          </tbody><tfoot><tr class="tot"><td>TOTAL GENERAL</td><td class="n">${num(totGen.rec)}</td><td class="n">${num(totGen.prod)}</td><td class="n">${num(totGen.dano)}</td><td class="n">${fmtAj(totGen.aj)}</td><td class="n">${num(totGen.stock)}</td></tr></tfoot></table></div></div>` : '<div class="card empty">No hay catálogo de insumos todavía.</div>');
+          </tbody>${(() => { const t = sumar(arr); return `<tfoot><tr class="tot"><td>TOTAL ${esc(cat)}</td><td class="n">${num(t.rec)}</td><td class="n">${num(t.prod)}</td><td class="n">${num(t.dano)}</td><td class="n">${fmtAj(t.aj)}</td><td class="n">${num(t.stock)}</td><td class="n">${num(sumMin(arr))}</td></tr></tfoot>`; })()}</table></div></div>`;
+      }).join('') + `<div class="card"><h2>Total general de insumos</h2><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Categoría</th><th class="n">Recibido</th><th class="n">A prod.</th><th class="n">Dañado</th><th class="n">Ajuste</th><th class="n">Stock</th><th class="n">Mín.</th></tr></thead><tbody>
+          ${totCat.map(x => `<tr><td><b>${esc(x.cat)}</b></td><td class="n">${num(x.t.rec)}</td><td class="n">${num(x.t.prod)}</td><td class="n">${num(x.t.dano)}</td><td class="n">${fmtAj(x.t.aj)}</td><td class="n" style="font-weight:800">${num(x.t.stock)}</td><td class="n">${num(sumMin(items.filter(i => i.categoria === x.cat)))}</td></tr>`).join('')}
+          </tbody><tfoot><tr class="tot"><td>TOTAL GENERAL</td><td class="n">${num(totGen.rec)}</td><td class="n">${num(totGen.prod)}</td><td class="n">${num(totGen.dano)}</td><td class="n">${fmtAj(totGen.aj)}</td><td class="n">${num(totGen.stock)}</td><td class="n">${num(sumMin(items))}</td></tr></tfoot></table></div></div>` : '<div class="card empty">No hay catálogo de insumos todavía.</div>');
   } else if (a === 'ENVASES') {
     const nombres = [...new Set([...Object.keys(st.env)])].sort();
     const total = nombres.reduce((x, n) => x + (st.env[n]?.stock || 0), 0);
@@ -861,12 +861,13 @@ function imprimirStockPDF() {
   const vacio = { rec: 0, prod: 0, dano: 0, aj: 0, stock: 0 };
   const sumar = arr => arr.reduce((t, i) => { const s = st.ins[i.id] || vacio; t.rec += s.rec; t.prod += s.prod; t.dano += s.dano; t.aj += s.aj; t.stock += s.stock; return t; }, { rec: 0, prod: 0, dano: 0, aj: 0, stock: 0 });
   const fmtAj = v => v ? (v > 0 ? '+' : '') + num(v) : '0';
-  const fila = (n, t, cls) => `<tr class="${cls || ''}"><td>${n}</td><td class="r">${num(t.rec)}</td><td class="r">${num(t.prod)}</td><td class="r">${num(t.dano)}</td><td class="r">${fmtAj(t.aj)}</td><td class="r b">${num(t.stock)}</td></tr>`;
+  const sumMin = arr => arr.reduce((t, i) => t + (Number(i.minimo) || 0), 0);
+  const fila = (n, t, cls, mn) => `<tr class="${cls || ''}"><td>${n}</td><td class="r">${num(t.rec)}</td><td class="r">${num(t.prod)}</td><td class="r">${num(t.dano)}</td><td class="r">${fmtAj(t.aj)}</td><td class="r b">${num(t.stock)}</td><td class="r">${mn ? num(mn) : (cls ? '0' : '-')}</td></tr>`;
   const cats = CATEGORIAS.map(cat => ({ cat, arr: items.filter(i => i.categoria === cat) })).filter(x => x.arr.length).map(x => ({ ...x, t: sumar(x.arr) }));
   const totGen = sumar(items), recibidos = items.filter(i => (st.ins[i.id]?.rec || 0) > 0).length;
-  const head = '<thead><tr><th>Ítem</th><th class="r">Recibido</th><th class="r">A prod.</th><th class="r">Dañado</th><th class="r">Ajuste</th><th class="r">Stock</th></tr></thead>';
-  const tablas = cats.map(x => `<h3>${esc(x.cat)}</h3><table>${head}<tbody>${x.arr.map(i => fila(esc(i.nombre), st.ins[i.id] || vacio)).join('')}</tbody><tfoot>${fila('TOTAL ' + esc(x.cat), x.t, 'tot')}</tfoot></table>`).join('');
-  const general = `<h3>Total general de insumos</h3><table>${head.replace('Ítem', 'Categoría')}<tbody>${cats.map(x => fila(esc(x.cat), x.t)).join('')}</tbody><tfoot>${fila('TOTAL GENERAL', totGen, 'tot')}</tfoot></table>`;
+  const head = '<thead><tr><th>Ítem</th><th class="r">Recibido</th><th class="r">A prod.</th><th class="r">Dañado</th><th class="r">Ajuste</th><th class="r">Stock</th><th class="r">Mín.</th></tr></thead>';
+  const tablas = cats.map(x => `<h3>${esc(x.cat)}</h3><table>${head}<tbody>${x.arr.map(i => fila(esc(i.nombre), st.ins[i.id] || vacio, '', Number(i.minimo) || 0)).join('')}</tbody><tfoot>${fila('TOTAL ' + esc(x.cat), x.t, 'tot', sumMin(x.arr))}</tfoot></table>`).join('');
+  const general = `<h3>Total general de insumos</h3><table>${head.replace('Ítem', 'Categoría')}<tbody>${cats.map(x => fila(esc(x.cat), x.t, 'cat', sumMin(x.arr))).join('')}</tbody><tfoot>${fila('TOTAL GENERAL', totGen, 'tot', sumMin(items))}</tfoot></table>`;
   const ahora = new Date().toLocaleString('es-EC', { dateStyle: 'short', timeStyle: 'short' });
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>Stock de insumos</title><style>
     @page{size:A4;margin:15mm}*{margin:0;padding:0;box-sizing:border-box}body{font:12px/1.4 Arial,sans-serif;color:#000}
@@ -882,7 +883,7 @@ function imprimirStockPDF() {
     </style></head><body>
     <div class="head"><img class="logo" src="${new URL('logo-luanaqua.png', location.href).href}" alt="AQUA LUAN" onerror="this.outerHTML='<h1>AQUA LUAN</h1>'">
       <div class="tt"><h1>BODEGA · STOCK DE INSUMOS</h1><h2>Fecha: ${esc(ahora)}</h2></div></div>
-    <div class="res"><div><span>Ítems de insumos</span><b>${items.length}</b></div><div><span>Ítems de insumos recibidos</span><b>${recibidos}</b></div><div><span>Stock total de insumos</span><b>${num(totGen.stock)}</b></div></div>
+    <div class="res"><div><span>Ítems de insumos recibidos</span><b>${num(totGen.rec)}</b></div><div><span>Stock total de insumos</span><b>${num(totGen.stock)}</b></div></div>
     ${tablas}${general}
     <div class="firmas"><div class="f"><b>JOHANNA LOPEZ</b>FIRMA</div><div class="f"><b>&nbsp;</b>FIRMA REVISADO AQUA LUAN</div></div>
     <div class="pie">Aqua Luan · Bodega</div>
