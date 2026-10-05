@@ -42,7 +42,7 @@ const _secApp = firebase.initializeApp(firebaseConfig, 'secundariaBodega');
 const _secAuth = _secApp.auth();
 const TS = () => firebase.firestore.FieldValue.serverTimestamp();
 
-const APP_VERSION = 'bodega-3.1.2';
+const APP_VERSION = 'bodega-3.1.3';
 const DOMINIO_LOGIN = '@luanaqua.app';
 function emailDeUsuario(u) {
   const limpio = String(u || '').trim().toLowerCase().replace(/[^a-z0-9._-]/g, '');
@@ -265,9 +265,12 @@ function insumosActivos() {
   return S.insumos.filter(i => i.activo !== false).sort((a, b) =>
     CATEGORIAS.indexOf(a.categoria) - CATEGORIAS.indexOf(b.categoria) || (a.orden ?? 999) - (b.orden ?? 999) || a.nombre.localeCompare(b.nombre));
 }
+/* [CAMBIO] Envases vacíos: misma lista fija que la app de pedidos (préstamo/retiro de envases),
+   para que el cuadre del camión compare los mismos nombres. */
+const ENVASES_PRESTAMO = ['ENVASE AZUL', 'ENVASE LLAVE', 'OFICINA - ENVASE'];
 function itemsDeArea(area, stock) {
   if (area === 'INSUMOS') return insumosActivos().map(i => ({ id: i.id, nombre: i.nombre, categoria: i.categoria, stock: stock.ins[i.id]?.stock || 0, minimo: Number(i.minimo) || 0 }));
-  if (area === 'ENVASES') return S.productos.map(p => ({ id: p.nombre, nombre: p.nombre, stock: stock.env[p.nombre]?.stock || 0, minimo: 0 }));
+  if (area === 'ENVASES') return ENVASES_PRESTAMO.map(n => ({ id: n, nombre: n, stock: stock.env[n]?.stock || 0, minimo: 0 }));
   return S.productos.map(p => ({ id: p.nombre, nombre: p.nombre, stock: stock.pt[p.nombre]?.stock || 0, minimo: 0 }));
 }
 function nombreArea(a) { return a === 'INSUMOS' ? 'Insumos' : a === 'ENVASES' ? 'Envases vacíos' : 'Producto terminado'; }
