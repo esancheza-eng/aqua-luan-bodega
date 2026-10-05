@@ -42,7 +42,7 @@ const _secApp = firebase.initializeApp(firebaseConfig, 'secundariaBodega');
 const _secAuth = _secApp.auth();
 const TS = () => firebase.firestore.FieldValue.serverTimestamp();
 
-const APP_VERSION = 'bodega-3.1.0';
+const APP_VERSION = 'bodega-3.1.2';
 const DOMINIO_LOGIN = '@luanaqua.app';
 function emailDeUsuario(u) {
   const limpio = String(u || '').trim().toLowerCase().replace(/[^a-z0-9._-]/g, '');
@@ -767,21 +767,26 @@ function imprimirMov(id) {
   const m = S.movs.find(x => x._id === id); if (!m) { toast('Espera un momento y vuelve a intentar.'); return; }
   const e = ETAPAS[m.etapa] || {};
   const filas = (m.items || []).map(i => `<tr><td>${esc(i.nombre)}${i.categoria ? ' <i>(' + esc(i.categoria) + ')</i>' : ''}</td><td class="r">${m.etapa === 'AJUSTE' && i.cantidad > 0 ? '+' : ''}${num(i.cantidad)}</td></tr>`).join('');
-  const firmas = m.etapa === 'CARGA' ? ['ENTREGA BODEGA', 'RECIBE ASESOR'] : (m.etapa === 'DEVOLUCION' || m.etapa === 'RETORNO_ENVASE') ? ['ENTREGA ASESOR', 'RECIBE BODEGA'] : m.etapa === 'RECEPCION' ? ['ENTREGA PROVEEDOR', 'RECIBE BODEGA'] : ['RESPONSABLE'];
+  const quien = m.creadoPorNombre || '', ase = nombreRuta(m.ruta);
+  const firmas = m.etapa === 'CARGA' ? [['ENTREGA BODEGA', quien], ['RECIBE ASESOR', ase]]
+    : (m.etapa === 'DEVOLUCION' || m.etapa === 'RETORNO_ENVASE') ? [['ENTREGA ASESOR', ase], ['RECIBE BODEGA', quien]]
+    : m.etapa === 'RECEPCION' ? [['ENTREGA PROVEEDOR', m.proveedor || ''], ['RECIBE BODEGA', quien]]
+    : [['RESPONSABLE', quien]];
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>Comprobante</title><style>
     @page{size:58mm auto;margin:2mm}*{margin:0;padding:0}body{width:48mm;font:12px/1.35 Arial,sans-serif;color:#000}
     h1{font-size:15px;text-align:center}h2{font-size:12px;text-align:center;margin:2px 0 4px}.c{text-align:center}
     hr{border:0;border-top:1px dashed #000;margin:4px 0}table{width:100%;border-collapse:collapse}td{padding:1px 0;vertical-align:top;font-size:12px}
-    .r{text-align:right;font-weight:bold;white-space:nowrap;padding-left:4px}.f{margin-top:22px;border-top:1px solid #000;text-align:center;font-size:10px}
+    .r{text-align:right;font-weight:bold;white-space:nowrap;padding-left:4px}.f{margin-top:26px;border-top:1px solid #000;text-align:center;font-size:10px;padding-top:2px}.f b{display:block;font-size:12px}
+    .logo{display:block;width:40mm;max-width:100%;height:auto;margin:0 auto 3px}
     </style></head><body>
-    <h1>AQUA LUAN</h1><h2>BODEGA · ${esc((e.titulo || m.etapa).toUpperCase())}</h2>
+    <img class="logo" src="${new URL('logo-luanaqua.png', location.href).href}" alt="AQUA LUAN" onerror="this.outerHTML='<h1>AQUA LUAN</h1>'"><h2>BODEGA · ${esc((e.titulo || m.etapa).toUpperCase())}</h2>
     <div>Fecha: <b>${fmtFecha(m.fecha)}</b> ${fmtHora(msDe(m))}</div><div>N°: ${esc(m._id.slice(0, 8).toUpperCase())}</div>
     ${m.ruta ? `<div>Asesor: <b>${esc(m.ruta)}</b></div>` : ''}${m.proveedor ? `<div>Proveedor: <b>${esc(m.proveedor)}</b></div>` : ''}${m.documento ? `<div>Doc: ${esc(m.documento)}</div>` : ''}
     ${m.motivo ? `<div>Motivo: ${esc(m.motivo)}</div>` : ''}${m.area && (m.etapa === 'DANO' || m.etapa === 'AJUSTE' || m.area === 'ENVASES') ? `<div>Área: ${nombreArea(m.area).toUpperCase()}</div>` : ''}
     <div>Registró: ${esc(m.creadoPorNombre || '')}</div>${m.anulado ? '<div><b>*** ANULADO ***</b></div>' : ''}
     <hr><table>${filas}</table><hr>${m.totalUnidades ? `<table><tr><td><b>TOTAL</b></td><td class="r">${num(m.totalUnidades)}</td></tr></table>` : ''}
     ${m.nota ? `<div>Obs.: ${esc(m.nota)}</div>` : ''}
-    ${firmas.map(f => `<div class="f">${f}</div>`).join('')}<br><div class="c">.</div>
+    ${firmas.map(([t, n]) => `<div class="f"><b>${esc(n || ' ')}</b>${t}</div>`).join('')}<br><div class="c">.</div>
     <script>window.onload=function(){setTimeout(function(){window.print()},300)}<\/script></body></html>`;
   const w = window.open('', '_blank');
   if (!w) { alert('El navegador bloqueó la ventana de impresión. Permite ventanas emergentes para esta app.'); return; }
