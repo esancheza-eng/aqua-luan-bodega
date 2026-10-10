@@ -42,7 +42,7 @@ const _secApp = firebase.initializeApp(firebaseConfig, 'secundariaBodega');
 const _secAuth = _secApp.auth();
 const TS = () => firebase.firestore.FieldValue.serverTimestamp();
 
-const APP_VERSION = 'bodega-3.1.5';
+const APP_VERSION = 'bodega-3.2.1';
 const DOMINIO_LOGIN = '@luanaqua.app';
 function emailDeUsuario(u) {
   const limpio = String(u || '').trim().toLowerCase().replace(/[^a-z0-9._-]/g, '');
@@ -84,7 +84,7 @@ const MOTIVOS_DANO = ['ROTO', 'DAÑADO', 'DERRAMADO', 'MAL SELLADO', 'CONTAMINAD
 const S = {
   user: null, perfil: null, nombre: '', roles: [], esAdmin: false, soloLectura: false,
   insumos: [], productos: [], movs: [], asesores: [], usuariosBod: [],
-  tab: 'inicio', form: {}, modo: { CARGA: 'CARGA', PRODUCCION: 'INSUMOS', DANO: 'INSUMOS', AJUSTE: 'INSUMOS', stock: 'INSUMOS', admin: 'USUARIOS' },
+  tab: 'inicio', form: {}, modo: { RECEPCION: 'PROVEEDOR', CARGA: 'CARGA', PRODUCCION: 'INSUMOS', DANO: 'INSUMOS', AJUSTE: 'INSUMOS', stock: 'INSUMOS', admin: 'USUARIOS' },
   cuadre: { fecha: '', cache: {}, cargando: false, error: '' },
   hist: { desde: '', hasta: '', etapa: '', q: '', limite: 40 },
   unsubs: [], firma: '', renderPendiente: false, errorReglas: false
@@ -242,11 +242,18 @@ function calcularStock() {
   const P = n => (pt[n] = pt[n] || { term: 0, carga: 0, dev: 0, dano: 0, aj: 0, stock: 0 });
   for (const m of S.movs) {
     if (m.anulado) continue;
+    if (m.entrega?.estado === 'CANCELADA') continue; /* [ENTREGA] envío cancelado por Recepción: no salió */
     for (const it of (m.items || [])) {
       const q = Number(it.cantidad) || 0;
       switch (m.etapa) {
         case 'RECEPCION': I(it.id).rec += q; break;
-        case 'PRODUCCION': if (m.area === 'ENVASES') E(it.nombre).prod += q; else I(it.id).prod += q; break;
+        case 'PRODUCCION': if (m.area === 'ENVASES') E(it.nombre).prod += q;
+          else { /* [ENTREGA] lo que producción devolvió dañado cuenta como dañado, no como "a producción" */
+            const d = Math.min(q, Number(m.entrega?.danado?.[it.id]) || 0);
+            const r = Math.min(q - d, Number(m.entrega?.encontrado?.[it.id]) || 0);   /* faltante que apareció en bodega: vuelve al stock */
+            const p = Math.min(q - d - r, Number(m.entrega?.perdido?.[it.id]) || 0);  /* faltante que no apareció: pérdida */
+            I(it.id).prod += q - d - r - p; I(it.id).dano += d + p; }
+          break;
         case 'RETORNO_ENVASE': E(it.nombre).ret += q; break;
         case 'TERMINADO': P(it.nombre).term += q; break;
         case 'CARGA': P(it.nombre).carga += q; break;
@@ -341,6 +348,7 @@ function renderInicio() {
     </div>
   </div>
   ${sinCatalogo && S.esAdmin ? `<div class="msg warn">Todavía no hay catálogo de insumos. Ve a <b>⚙ Admin → Catálogo</b> y pulsa “Cargar lista inicial”.</div>` : ''}
+  ${avisoEntregasInicio()}
   ${quick ? `<div class="quick" style="margin-bottom:12px">${quick}</div>` : ''}
   <div class="kpis">
     <div class="kpi" style="border-color:var(--e1)"><span>Recibido hoy</span><b>${num(tot('RECEPCION'))}</b><small>unidades de insumos</small></div>
@@ -361,7 +369,12 @@ function renderInicio() {
 /* ══════════════════════════ FORMULARIOS DE ETAPA ══════════════════════════ */
 function cfgDe(tab) {
   switch (tab) {
-    case 'RECEPCION':  return { key: 'RECEPCION', etapa: 'RECEPCION', area: 'INSUMOS', limitar: false, campos: ['proveedor', 'documento', 'fecha', 'nota'] };
+    case 'RECEPCION': {
+      /* [ENTREGA] Recepción puede además ENVIAR insumos a producción (producción confirma lo que recibe) */
+      const segR = { modo: 'RECEPCION', ops: [['PROVEEDOR', '1 · Recibir del proveedor'], ['ENVIO', '➜ Enviar a producción']] };
+      if (S.modo.RECEPCION === 'ENVIO') return { key: 'ENVIO_PROD', etapa: 'PRODUCCION', area: 'INSUMOS', limitar: true, envio: true, campos: ['fecha', 'nota'], seg: segR };
+      return { key: 'RECEPCION', etapa: 'RECEPCION', area: 'INSUMOS', limitar: false, campos: ['proveedor', 'documento', 'fecha', 'nota'], seg: segR };
+    }
     case 'PRODUCCION': {
       const env = S.modo.PRODUCCION === 'ENVASES';
       return { key: env ? 'PRODUCCION_ENV' : 'PRODUCCION', etapa: 'PRODUCCION', area: env ? 'ENVASES' : 'INSUMOS', limitar: true, campos: ['fecha', 'nota'],
@@ -393,7 +406,7 @@ function estadoForm(key) {
 function firmaFormulario(tab) {
   const c = cfgDe(tab);
   const ids = c.area === 'INSUMOS' ? insumosActivos().map(i => i.id + i.nombre) : S.productos.map(p => p.nombre + c.area);
-  return c.key + '|' + ids.join(',') + '|' + S.asesores.join(',') + '|' + S.errorReglas;
+  return c.key + '|' + ids.join(',') + '|' + S.asesores.join(',') + '|' + S.errorReglas + '|' + firmaEntregas(tab);
 }
 function refrescarFormulario() {
   if (firmaFormulario(S.tab) !== S.firma) { renderMain(); return; }
@@ -438,13 +451,16 @@ function campoHTML(c, f, campo) {
   return '';
 }
 function htmlFormulario(tab) {
-  const c = cfgDe(tab), e = ETAPAS[c.etapa], f = estadoForm(c.key), st = calcularStock();
+  const c = cfgDe(tab), f = estadoForm(c.key), st = calcularStock();
+  const e = c.envio ? { ...ETAPAS.PRODUCCION, n: '➜', titulo: 'Enviar a producción', desc: 'Recepción entrega insumos a la línea de producción. Producción confirmará producto por producto lo que recibe.' } : ETAPAS[c.etapa];
   const items = itemsDeArea(c.area, st);
   let aviso = '';
   if (c.etapa === 'CARGA') aviso = `<div class="msg info">Solo producto lleno que sale de la bodega de terminado. Los envases vacíos de CAMBIO <b>no</b> se registran.</div>`;
   if (c.etapa === 'DEVOLUCION') aviso = `<div class="msg info">Solo producto <b>LLENO</b> que regresa sin vender. Los envases vacíos de CAMBIO <b>no</b> entran al stock.</div>`;
   if (c.etapa === 'RETORNO_ENVASE') aviso = `<div class="msg info">Solo envases <b>PRESTADOS</b> que el asesor recuperó de los clientes (los que marcó como “devolvió” en la app de pedidos). Entran al stock de <b>envases vacíos</b> para luego ir a producción. Los envases de CAMBIO <b>no</b> se registran.</div>`;
   if (c.etapa === 'PRODUCCION' && c.area === 'ENVASES') aviso = `<div class="msg info">Envases vacíos (devueltos de préstamos) que pasan a producción para llenarse.</div>`;
+  if (c.envio) aviso = `<div class="msg info">Lo que envíes sale de la bodega de insumos y queda <b>pendiente de confirmar</b> por Producción. Si algo llega dañado, Producción lo devuelve y tú confirmas que lo recibiste.</div>`;
+  else if (c.etapa === 'PRODUCCION' && c.area === 'INSUMOS' && requiereAvisoRecepcion()) aviso = `<div class="msg warn">Estás sacando insumos de la bodega de <b>Recepción</b>. Al guardar, Recepción recibirá un aviso para confirmar la salida.</div>`;
   if (c.etapa === 'TERMINADO') aviso = `<div class="msg info">Estos son los mismos productos de la app del asesor. Esta entrada también suma al Inventario del dashboard.</div>`;
   if (c.etapa === 'AJUSTE') aviso = `<div class="msg warn">Escribe solo lo que contaste. Lo que dejes vacío no se toca. ${c.area === 'TERMINADO' ? 'La diferencia también se registra en el Inventario del dashboard.' : ''}</div>`;
   const seg = c.seg ? `<div class="seg" style="margin-bottom:12px">${c.seg.ops.map(([v, l]) => `<button class="${S.modo[c.seg.modo] === v ? 'on' : ''}" onclick="setModo('${c.seg.modo}','${v}')">${esc(l)}</button>`).join('')}</div>` : '';
@@ -471,8 +487,9 @@ function htmlFormulario(tab) {
             </div></div>`;
         }).join('')}</div>`).join('');
   }
-  const soloLect = S.soloLectura || (c.etapa !== 'DANO' && c.etapa !== 'AJUSTE' && !puede(c.etapa === 'DEVOLUCION' || c.etapa === 'RETORNO_ENVASE' ? 'CARGA' : c.etapa));
-  return `
+  const soloLect = S.soloLectura || (c.etapa !== 'DANO' && c.etapa !== 'AJUSTE' && !puede(c.envio ? 'RECEPCION' : c.etapa === 'DEVOLUCION' || c.etapa === 'RETORNO_ENVASE' ? 'CARGA' : c.etapa));
+  const pendEnt = (tab === 'RECEPCION' || tab === 'PRODUCCION') ? htmlPendientesEntrega(tab) : '';
+  return `${pendEnt}
   <div class="card">
     <div class="step-head"><div class="step-num" style="background:var(--${e.c}bg);color:var(--${e.c})">${esc(e.n)}</div>
       <div><h2>${esc(e.titulo)}</h2><p>${esc(e.desc)}</p></div></div>
@@ -562,8 +579,14 @@ function revisar(tab) {
     ? ajustes.map(({ it, delta }) => `<tr><td>${esc(it.nombre)}${it.categoria ? `<br><small style="color:var(--muted)">${esc(it.categoria)}</small>` : ''}</td><td class="n">${num(it.stock)}</td><td class="n">${num(f.qty[it.id])}</td><td class="n" style="font-weight:800;color:${delta < 0 ? 'var(--red)' : 'var(--ok)'}">${delta > 0 ? '+' : ''}${num(delta)}</td></tr>`).join('')
     : elegidos.map(it => `<tr><td>${esc(it.nombre)}${it.categoria ? `<br><small style="color:var(--muted)">${esc(it.categoria)}</small>` : ''}</td><td class="n"><b>${num(f.qty[it.id])}</b></td></tr>`).join('');
   const total = elegidos.reduce((a, it) => a + (f.qty[it.id] || 0), 0);
+  /* [ENTREGA] Avisos de confirmación entre Recepción y Producción */
+  const tituloEnvio = c.envio ? '➜ · Enviar a producción' : '';
+  const sacaSolo = !c.envio && c.etapa === 'PRODUCCION' && c.area === 'INSUMOS' && requiereAvisoRecepcion();
+  if (sacaSolo) avisoDev += `<div class="msg warn"><b>¿Está seguro que va a sacar estos productos de la bodega de Recepción?</b><br>Recepción recibirá un aviso para confirmar esta salida.</div>`;
+  if (c.envio) avisoDev += `<div class="msg info">Producción deberá confirmar producto por producto lo que recibe. Quedará <b>pendiente</b> hasta entonces.</div>`;
+  const txtBoton = sacaSolo ? 'Sí, sacar y avisar a Recepción' : c.envio ? 'Enviar a producción' : 'Confirmar y guardar';
   openModal(`
-    <h3>${esc(e.n)} · ${esc(e.titulo)}${c.etapa === 'DANO' || c.etapa === 'AJUSTE' || (c.etapa === 'PRODUCCION' && c.area === 'ENVASES') ? ' — ' + nombreArea(c.area) : ''}</h3>
+    <h3>${tituloEnvio ? tituloEnvio : esc(e.n) + ' · ' + esc(e.titulo)}${c.etapa === 'DANO' || c.etapa === 'AJUSTE' || (c.etapa === 'PRODUCCION' && c.area === 'ENVASES') ? ' — ' + nombreArea(c.area) : ''}</h3>
     <div class="mov-meta">Fecha: <b>${fmtFecha(f.campos.fecha)}</b>
       ${f.campos.asesor ? `<br>Asesor: <b style="font-size:16px">${esc(f.campos.asesor)}</b>` : ''}
       ${c.campos.includes('proveedor') ? `<br>Proveedor: <b>${esc(upper(f.campos.proveedor))}</b>${f.campos.documento ? ' · Doc: <b>' + esc(upper(f.campos.documento)) + '</b>' : ''}` : ''}
@@ -573,7 +596,7 @@ function revisar(tab) {
     <div class="tbl-wrap"><table class="tbl"><thead><tr>${c.conteo ? '<th>Ítem</th><th class="n">Sistema</th><th class="n">Conteo</th><th class="n">Ajuste</th>' : '<th>Ítem</th><th class="n">Cantidad</th>'}</tr></thead>
       <tbody>${filas}</tbody>${c.conteo ? '' : `<tfoot><tr><td><b>TOTAL</b></td><td class="n"><b>${num(total)}</b></td></tr></tfoot>`}</table></div>
     <div class="actions"><button class="btn btn-out" style="flex:1" onclick="closeModal()">Corregir</button>
-      <button class="btn btn-main" style="flex:2" id="btnConfirmar" onclick="confirmarGuardar('${tab}')">Confirmar y guardar</button></div>`);
+      <button class="btn btn-main" style="flex:2" id="btnConfirmar" onclick="confirmarGuardar('${tab}')">${txtBoton}</button></div>`);
 }
 
 function confirmarGuardar(tab) {
@@ -597,6 +620,9 @@ function confirmarGuardar(tab) {
   if (c.campos.includes('proveedor')) { doc.proveedor = upper(f.campos.proveedor, 80); doc.documento = upper(f.campos.documento, 40); }
   if (c.campos.includes('asesor')) doc.ruta = f.campos.asesor;
   if (c.etapa === 'DANO') doc.motivo = f.campos.motivo || 'OTRO';
+  /* [ENTREGA] Recepción envía → Producción confirma; Producción saca sola → Recepción confirma */
+  if (c.envio) doc.entrega = { origen: 'RECEPCION', estado: 'PENDIENTE_PRODUCCION' };
+  else if (c.etapa === 'PRODUCCION' && c.area === 'INSUMOS' && requiereAvisoRecepcion()) doc.entrega = { origen: 'PRODUCCION', estado: 'PENDIENTE_RECEPCION' };
 
   const ref = db.collection('bodMovimientos').doc();
   ref.set(doc).catch(err => {
@@ -612,7 +638,8 @@ function confirmarGuardar(tab) {
   const offline = !navigator.onLine;
   openModal(`<h3>✓ Guardado</h3>
     <div class="msg ${offline ? 'warn' : 'ok'}">${offline ? 'Estás sin internet: quedó guardado en este celular y se enviará solo al volver la conexión. No cierres sesión.' : 'Registro enviado.'}</div>
-    <div class="mov-meta">${esc(ETAPAS[c.etapa].titulo)} · ${items.length} ítem(s)${doc.totalUnidades ? ' · ' + num(doc.totalUnidades) + ' unidades' : ''}${doc.ruta ? '<br>Asesor: <b>' + esc(doc.ruta) + '</b>' : ''}</div>
+    <div class="mov-meta">${esc(c.envio ? 'Envío a producción' : ETAPAS[c.etapa].titulo)} · ${items.length} ítem(s)${doc.totalUnidades ? ' · ' + num(doc.totalUnidades) + ' unidades' : ''}${doc.ruta ? '<br>Asesor: <b>' + esc(doc.ruta) + '</b>' : ''}</div>
+    ${doc.entrega ? `<div class="msg info">${doc.entrega.origen === 'RECEPCION' ? 'Queda pendiente hasta que Producción confirme lo que recibió.' : 'Recepción recibirá un aviso para confirmar esta salida.'}</div>` : ''}
     <div class="actions"><button class="btn btn-out" style="flex:1" onclick="elegirImpresion('${ref.id}')">🖨 Imprimir comprobante</button>
       <button class="btn btn-main" style="flex:1" onclick="closeModal()">Listo</button></div>`);
 }
@@ -706,16 +733,19 @@ function htmlMov(m, sinAcciones) {
     m.motivo ? `Motivo: <b>${esc(m.motivo)}</b>` : '',
     `Por: <b>${esc(m.creadoPorNombre || '-')}</b>`,
     m.nota ? `Obs.: ${esc(m.nota)}` : '',
+    m.entrega?.estado === 'CANCELADA' ? `<span style="color:var(--muted)">ENVÍO CANCELADO por ${esc(m.entrega.canceladoPorNombre || '-')}: ${esc(m.entrega.motivoCancelacion || '')} (no cuenta en el stock)</span>` : '',
     m.anulado ? `<span style="color:var(--red)">ANULADO por ${esc(m.anuladoPorNombre || '-')}: ${esc(m.motivoAnulacion || '')}</span>` : ''
   ].filter(Boolean).join(' · ');
   const chips = (m.items || []).map(i => `<span class="chip">${i.categoria ? esc(i.categoria.slice(0, 3)) + ' · ' : ''}${esc(i.nombre)}: ${m.etapa === 'AJUSTE' ? (i.cantidad > 0 ? '+' : '') : ''}${num(i.cantidad)}</span>`).join('');
   return `<div class="mov ${m.anulado ? 'anulado' : ''}">
-    <div class="mov-top">${etapaBadge(m.etapa)}${area}${m._pend ? '<span class="pend">⏳ pendiente de enviar</span>' : ''}
+    <div class="mov-top">${etapaBadge(m.etapa)}${area}${m.entrega && !m.anulado ? badgeEntrega(m) : ''}${m._pend ? '<span class="pend">⏳ pendiente de enviar</span>' : ''}
       <span class="when">${fmtFecha(m.fecha)} ${fmtHora(msDe(m))}</span></div>
     <div class="mov-meta">${meta}</div>
     <div class="mov-items">${chips}</div>
     ${sinAcciones ? '' : `<div class="actions" style="margin-top:8px">
       <button class="btn btn-out btn-sm" onclick="elegirImpresion('${m._id}')">🖨 Imprimir</button>
+      ${m.entrega && puedeCancelarEnvio(m) ? `<button class="btn btn-out btn-sm" style="color:var(--red)" onclick="pedirCancelarEnvio('${m._id}')">✖ Cancelar envío</button>` : ''}
+      ${m.entrega && !m.anulado && accionEntrega(m) ? `<button class="btn btn-main btn-sm" onclick="abrirConfirmarEntrega('${m._id}')">${esc(accionEntrega(m))}</button>` : ''}
       ${S.esAdmin && !m.anulado ? `<button class="btn btn-out btn-sm" style="color:var(--red)" onclick="pedirAnular('${m._id}')">Anular</button>` : ''}
     </div>`}</div>`;
 }
@@ -813,6 +843,7 @@ function elegirImpresion(id) {
     <div class="actions" style="flex-direction:column;gap:8px">
       <button class="btn btn-main btn-block" onclick="closeModal();imprimirMov('${id}')">🧾 Ticket térmico (58 mm)</button>
       <button class="btn btn-out btn-block" onclick="closeModal();imprimirMovPDF('${id}')">📄 PDF / Impresión normal (A4)</button>
+      ${S.movs.find(x => x._id === id)?.entrega ? `<button class="btn btn-out btn-block" onclick="closeModal();imprimirActaEntrega('${id}')">📋 Acta de entrega Recepción ↔ Producción (PDF)</button>` : ''}
       <button class="btn btn-out btn-block" onclick="closeModal()">Cancelar</button></div>`);
 }
 
@@ -887,6 +918,321 @@ function imprimirStockPDF() {
     ${tablas}${general}
     <div class="firmas"><div class="f"><b>JOHANNA LOPEZ</b>FIRMA</div><div class="f"><b>&nbsp;</b>FIRMA REVISADO AQUA LUAN</div></div>
     <div class="pie">Aqua Luan · Bodega</div>
+    <script>window.onload=function(){setTimeout(function(){window.print()},300)}<\/script></body></html>`;
+  const w = window.open('', '_blank');
+  if (!w) { alert('El navegador bloqueó la ventana de impresión. Permite ventanas emergentes para esta app.'); return; }
+  w.document.open(); w.document.write(html); w.document.close();
+}
+
+/* ══════════════════════════ [ENTREGA] RECEPCIÓN ↔ PRODUCCIÓN ══════════════════════════
+   Se guarda en el MISMO movimiento de "Salida a producción" (bodMovimientos), campo `entrega`:
+     origen 'RECEPCION'  → Recepción envía; Producción confirma por producto (recibido / dañado).
+                           Lo dañado se devuelve a Recepción, que confirma que lo recibió.
+     origen 'PRODUCCION' → Producción saca sola; Recepción confirma la salida (conforme / no conforme).
+   Estados: PENDIENTE_PRODUCCION · PENDIENTE_DEVOLUCION · PENDIENTE_RECEPCION · CONFIRMADA · CON_DIFERENCIA · CANCELADA
+   Faltantes: Recepción los revisa → `encontrado` (vuelve al stock) o `perdido` (cuenta como dañado/pérdida).
+   Cancelación: Recepción puede cancelar su envío mientras Producción no lo confirme (el stock vuelve).
+   Los `items` (lo enviado) nunca se modifican. En el stock, lo dañado devuelto pasa de "A prod." a "Dañado". */
+const ESTADOS_ENTREGA = {
+  PENDIENTE_PRODUCCION: { t: 'Pendiente: Producción confirma', bg: 'var(--amberbg)', c: 'var(--amber)' },
+  PENDIENTE_DEVOLUCION: { t: 'Pendiente: Recepción revisa dañados/faltantes', bg: 'var(--amberbg)', c: 'var(--amber)' },
+  PENDIENTE_RECEPCION:  { t: 'Pendiente: Recepción confirma salida', bg: 'var(--amberbg)', c: 'var(--amber)' },
+  CONFIRMADA:           { t: '✓ Cuadrado', bg: 'var(--okbg)', c: 'var(--ok)' },
+  CON_DIFERENCIA:       { t: '⚠ Con diferencia', bg: 'var(--redbg)', c: 'var(--red)' },
+  CANCELADA:            { t: '✖ Envío cancelado', bg: 'var(--soft)', c: 'var(--muted)' }
+};
+/* Quien saca de producción sin ser de Recepción (ni admin) genera aviso a Recepción */
+let _entregaAbierta = null;
+function requiereAvisoRecepcion() { return !S.esAdmin && !S.roles.includes('RECEPCION'); }
+function badgeEntrega(m) {
+  const e = ESTADOS_ENTREGA[m.entrega.estado]; if (!e) return '';
+  return ` <span class="badge" style="background:${e.bg};color:${e.c}">${esc(e.t)}</span>`;
+}
+function accionEntrega(m) {
+  if (S.soloLectura || m.anulado || !m.entrega) return '';
+  const est = m.entrega.estado;
+  if (est === 'PENDIENTE_PRODUCCION' && puede('PRODUCCION')) return '✔ Confirmar lo recibido';
+  if (est === 'PENDIENTE_RECEPCION' && puede('RECEPCION')) return '✔ Confirmar salida';
+  if (est === 'PENDIENTE_DEVOLUCION' && puede('RECEPCION')) return Number(m.entrega.totalFaltante) > 0 ? '✔ Revisar dañados y faltantes' : '✔ Recibir dañados';
+  return '';
+}
+function entregasAbiertas() {
+  return S.movs.filter(m => !m.anulado && m.entrega && String(m.entrega.estado).startsWith('PENDIENTE'))
+    .sort((a, b) => (a.fecha || '').localeCompare(b.fecha || '') || msDe(a) - msDe(b));
+}
+function firmaEntregas(tab) {
+  if (tab !== 'RECEPCION' && tab !== 'PRODUCCION') return '';
+  return S.movs.filter(m => m.entrega).map(m => m._id + (m.entrega.estado || '') + (m.anulado ? 'x' : '')).join(',');
+}
+function chipsEntrega(m) {
+  return (m.items || []).map(i => `<span class="chip">${i.categoria ? esc(i.categoria.slice(0, 3)) + ' · ' : ''}${esc(i.nombre)}: ${num(i.cantidad)}</span>`).join('');
+}
+function htmlPendientesEntrega(tab) {
+  const abiertas = entregasAbiertas();
+  const miTurno = abiertas.filter(m => accionEntrega(m));
+  const otraParte = abiertas.filter(m => !accionEntrega(m) &&
+    (tab === 'RECEPCION' ? m.entrega.estado === 'PENDIENTE_PRODUCCION' : ['PENDIENTE_RECEPCION', 'PENDIENTE_DEVOLUCION'].includes(m.entrega.estado)));
+  if (!miTurno.length && !otraParte.length) return '';
+  const fila = (m, conBoton) => `<div class="mov">
+      <div class="mov-top">${badgeEntrega(m)}<span class="when">${fmtFecha(m.fecha)} ${fmtHora(msDe(m))}</span></div>
+      <div class="mov-meta">${m.entrega.origen === 'RECEPCION' ? 'Envió Recepción' : 'Retiró Producción'}: <b>${esc(m.creadoPorNombre || '-')}</b> · ${num(m.totalUnidades)} unidades${m.nota ? ' · Obs.: ' + esc(m.nota) : ''}</div>
+      <div class="mov-items">${chipsEntrega(m)}</div>
+      ${!conBoton && puedeCancelarEnvio(m) ? `<div class="actions" style="margin-top:8px"><button class="btn btn-out btn-sm" style="color:var(--red)" onclick="pedirCancelarEnvio('${m._id}')">✖ Cancelar envío</button></div>` : ''}
+      ${conBoton ? `<div class="actions" style="margin-top:8px"><button class="btn btn-main btn-sm" onclick="abrirConfirmarEntrega('${m._id}')">${esc(accionEntrega(m))}</button>
+        <button class="btn btn-out btn-sm" onclick="imprimirActaEntrega('${m._id}')">📋 Acta PDF</button></div>` : ''}</div>`;
+  return `${miTurno.length ? `<div class="card" style="border:2px solid var(--amber)"><h2 style="color:var(--amber)">🔔 Te toca confirmar (${miTurno.length})</h2>
+      <p class="hint">${tab === 'PRODUCCION' ? 'Insumos que Recepción te envió. Cuenta producto por producto y confirma lo que recibiste y lo que vino dañado.' : 'Salidas a producción y devoluciones de dañados que debes confirmar.'}</p>
+      ${miTurno.map(m => fila(m, true)).join('')}</div>` : ''}
+    ${otraParte.length ? `<div class="card"><h2>⏳ Esperando confirmación de ${tab === 'RECEPCION' ? 'Producción' : 'Recepción'} (${otraParte.length})</h2>
+      ${otraParte.map(m => fila(m, false)).join('')}</div>` : ''}`;
+}
+function avisoEntregasInicio() {
+  const n = entregasAbiertas().filter(m => accionEntrega(m)).length;
+  if (!n) return '';
+  const destino = puede('PRODUCCION') && entregasAbiertas().some(m => m.entrega.estado === 'PENDIENTE_PRODUCCION' && accionEntrega(m)) ? 'PRODUCCION' : 'RECEPCION';
+  return `<div class="msg warn" style="display:flex;align-items:center;gap:10px;justify-content:space-between">
+    <span>🔔 Tienes <b>${n}</b> entrega(s) entre Recepción y Producción por confirmar.</span>
+    <button class="btn btn-main btn-sm" onclick="irA('${destino}')">Ver</button></div>`;
+}
+
+/* ── Pantallas de confirmación ── */
+function abrirConfirmarEntrega(id) {
+  const m = S.movs.find(x => x._id === id); if (!m || !m.entrega) return;
+  if (!accionEntrega(m)) { toast('Esta entrega ya fue confirmada o no te corresponde.'); return; }
+  const est = m.entrega.estado; _entregaAbierta = id;
+  const cab = `<div class="mov-meta">Fecha: <b>${fmtFecha(m.fecha)}</b> ${fmtHora(msDe(m))} · N° ${esc(m._id.slice(0, 8).toUpperCase())}<br>
+    ${m.entrega.origen === 'RECEPCION' ? 'Envió Recepción' : 'Retiró Producción'}: <b>${esc(m.creadoPorNombre || '-')}</b>${m.nota ? '<br>Obs.: ' + esc(m.nota) : ''}</div>`;
+  if (est === 'PENDIENTE_PRODUCCION') {
+    const filas = (m.items || []).map((i, k) => `<tr data-k="${k}">
+      <td>${esc(i.nombre)}${i.categoria ? `<br><small style="color:var(--muted)">${esc(i.categoria)}</small>` : ''}</td>
+      <td class="n"><b>${num(i.cantidad)}</b></td>
+      <td class="n"><input class="in" type="number" inputmode="numeric" min="0" step="1" style="width:70px;padding:6px;text-align:right" data-rec value="${Number(i.cantidad) || 0}" oninput="recalcEntrega()"></td>
+      <td class="n"><input class="in" type="number" inputmode="numeric" min="0" step="1" style="width:70px;padding:6px;text-align:right" data-dan value="" placeholder="0" oninput="recalcEntrega()"></td>
+      <td class="n" data-dif>✓</td></tr>`).join('');
+    openModal(`<h3>✔ Confirmar lo recibido de Recepción</h3>${cab}
+      <div class="msg info">Cuenta cada producto. En <b>Recibido</b> pon lo que llegó en buen estado y en <b>Dañado</b> lo que vino roto o dañado (eso se devuelve a Recepción).</div>
+      <div class="tbl-wrap"><table class="tbl" id="tblEntrega"><thead><tr><th>Producto</th><th class="n">Enviado</th><th class="n">Recibido</th><th class="n">Dañado</th><th class="n">Cuadre</th></tr></thead><tbody>${filas}</tbody></table></div>
+      <div id="resEntrega"></div>
+      <label class="lbl">Observación <span id="obsReq" class="hint"></span></label><textarea class="in" id="notaEntrega" style="text-transform:uppercase" placeholder="Ej. 1 TAPA ROTA, ETIQUETA MOJADA…"></textarea>
+      <div class="actions"><button class="btn btn-out" style="flex:1" onclick="closeModal()">Cancelar</button>
+        <button class="btn btn-main" style="flex:2" id="btnEntrega" onclick="guardarConfirmProduccion('${id}')">Confirmar recepción</button></div>`);
+    recalcEntrega();
+    return;
+  }
+  if (est === 'PENDIENTE_RECEPCION') {
+    openModal(`<h3>✔ Confirmar salida a producción</h3>${cab}
+      <div class="msg warn">Producción retiró estos insumos de tu bodega. Verifica que sea correcto.</div>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Producto</th><th class="n">Retiró</th></tr></thead><tbody>
+        ${(m.items || []).map(i => `<tr><td>${esc(i.nombre)}${i.categoria ? `<br><small style="color:var(--muted)">${esc(i.categoria)}</small>` : ''}</td><td class="n"><b>${num(i.cantidad)}</b></td></tr>`).join('')}
+      </tbody><tfoot><tr><td><b>TOTAL</b></td><td class="n"><b>${num(m.totalUnidades)}</b></td></tr></tfoot></table></div>
+      <label class="lbl">Observación (obligatoria si no está conforme)</label><textarea class="in" id="notaEntrega" style="text-transform:uppercase"></textarea>
+      <div class="actions"><button class="btn btn-out" style="flex:1" onclick="closeModal()">Cancelar</button>
+        <button class="btn btn-red" style="flex:1" onclick="guardarConfirmRecepcion('${id}',false)">⚠ No conforme</button>
+        <button class="btn btn-main" style="flex:1" onclick="guardarConfirmRecepcion('${id}',true)">✓ Conforme</button></div>`);
+    return;
+  }
+  if (est === 'PENDIENTE_DEVOLUCION') {
+    const dan = m.entrega.danado || {}, fal = m.entrega.faltante || {};
+    const lista = (m.items || []).filter(i => Number(dan[i.id]) > 0);
+    const listaF = (m.items || []).map((i, k) => ({ i, k })).filter(x => Number(fal[x.i.id]) > 0);
+    openModal(`<h3>✔ Revisar lo que devolvió / no recibió Producción</h3>${cab}
+      <div class="mov-meta">Confirmó Producción: <b>${esc(m.entrega.confirmadoPorNombre || '-')}</b>${m.entrega.notaProduccion ? '<br>Obs. producción: ' + esc(m.entrega.notaProduccion) : ''}</div>
+      ${lista.length ? `<h2 style="margin-top:10px">Dañados devueltos</h2><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Producto</th><th class="n">Dañado devuelto</th></tr></thead><tbody>
+        ${lista.map(i => `<tr><td>${esc(i.nombre)}${i.categoria ? `<br><small style="color:var(--muted)">${esc(i.categoria)}</small>` : ''}</td><td class="n"><b>${num(dan[i.id])}</b></td></tr>`).join('')}
+      </tbody></table></div><div class="msg info">Los dañados se descuentan del stock como <b>dañados</b>.</div>` : ''}
+      ${listaF.length ? `<h2 style="margin-top:10px">Faltantes (no llegaron a Producción)</h2>
+        <p class="hint">Busca en tu bodega. En <b>Está en bodega</b> pon lo que encontraste: vuelve al stock. Lo que no aparezca queda como <b>pérdida</b>.</p>
+        <div class="tbl-wrap"><table class="tbl" id="tblFalt"><thead><tr><th>Producto</th><th class="n">Faltante</th><th class="n">Está en bodega</th><th class="n">Pérdida</th></tr></thead><tbody>
+        ${listaF.map(({ i }) => `<tr data-id="${esc(i.id)}" data-f="${Number(fal[i.id])}"><td>${esc(i.nombre)}${i.categoria ? `<br><small style="color:var(--muted)">${esc(i.categoria)}</small>` : ''}</td><td class="n"><b>${num(fal[i.id])}</b></td>
+          <td class="n"><input class="in" type="number" inputmode="numeric" min="0" step="1" style="width:70px;padding:6px;text-align:right" data-enc placeholder="0" oninput="recalcFaltantes()"></td>
+          <td class="n" data-per>${num(fal[i.id])}</td></tr>`).join('')}
+        </tbody></table></div><div id="resFalt"></div>` : ''}
+      <label class="lbl">Observación <span id="obsReqF" class="hint"></span></label><textarea class="in" id="notaEntrega" style="text-transform:uppercase" placeholder="Ej. SE RECLAMA AL PROVEEDOR / SE ENCONTRÓ EN EL ESTANTE"></textarea>
+      <div class="actions"><button class="btn btn-out" style="flex:1" onclick="closeModal()">Cancelar</button>
+        <button class="btn btn-main" style="flex:2" id="btnDevol" onclick="guardarDevolucion('${id}')">Confirmar revisión</button></div>`);
+    recalcFaltantes();
+  }
+}
+function leerTablaEntrega() {
+  return [...document.querySelectorAll('#tblEntrega tbody tr')].map(tr => ({
+    k: Number(tr.dataset.k), tr,
+    rec: Math.max(0, Math.floor(Number(tr.querySelector('[data-rec]').value) || 0)),
+    dan: Math.max(0, Math.floor(Number(tr.querySelector('[data-dan]').value) || 0))
+  }));
+}
+function recalcEntrega() {
+  const m = S.movs.find(x => x._id === _entregaAbierta); if (!m || !$('#btnEntrega')) return;
+  let falt = 0, dan = 0, exceso = 0;
+  leerTablaEntrega().forEach(r => {
+    const env = Number(m.items[r.k].cantidad) || 0, dif = env - r.rec - r.dan, cel = r.tr.querySelector('[data-dif]');
+    dan += r.dan;
+    if (dif === 0) { cel.innerHTML = '<span style="color:var(--ok);font-weight:800">✓</span>'; }
+    else if (dif > 0) { falt += dif; cel.innerHTML = `<span style="color:var(--red);font-weight:800">faltan ${num(dif)}</span>`; }
+    else { exceso += -dif; cel.innerHTML = `<span style="color:var(--red);font-weight:800">sobran ${num(-dif)}</span>`; }
+  });
+  const res = $('#resEntrega');
+  res.innerHTML = exceso ? `<div class="msg err">Recibido + dañado no puede ser mayor a lo enviado. Corrige las cantidades.</div>`
+    : falt ? `<div class="msg err">Faltan <b>${num(falt)}</b> unidad(es): no llegaron ni buenas ni dañadas. Recepción las buscará en su bodega: lo que aparezca vuelve al stock y lo que no, queda como pérdida.</div>`
+    : dan ? `<div class="msg warn"><b>${num(dan)}</b> unidad(es) dañada(s) se devolverán a Recepción.</div>`
+    : `<div class="msg ok">Todo cuadra con lo enviado.</div>`;
+  $('#obsReq').textContent = (falt || dan) ? '(obligatoria)' : '';
+  $('#btnEntrega').disabled = exceso > 0;
+}
+function guardarConfirmProduccion(id) {
+  const m = S.movs.find(x => x._id === id); if (!m || m.entrega?.estado !== 'PENDIENTE_PRODUCCION') return closeModal();
+  const filas = leerTablaEntrega(), nota = upper($('#notaEntrega')?.value, 300);
+  const recibido = {}, danado = {}, faltante = {};
+  let totRec = 0, totDan = 0, totFalt = 0;
+  for (const r of filas) {
+    const it = m.items[r.k], env = Number(it.cantidad) || 0, dif = env - r.rec - r.dan;
+    if (dif < 0) return alert(`${it.nombre}: recibido + dañado (${r.rec + r.dan}) es mayor a lo enviado (${env}).`);
+    recibido[it.id] = r.rec; totRec += r.rec;
+    if (r.dan) { danado[it.id] = r.dan; totDan += r.dan; }
+    if (dif) { faltante[it.id] = dif; totFalt += dif; }
+  }
+  if ((totDan || totFalt) && !nota) return alert('Escribe una observación: explica qué vino dañado o qué faltó.');
+  const resumen = `Recibido en buen estado: ${num(totRec)}` + (totDan ? `\nDañado (se devuelve a Recepción): ${num(totDan)}` : '') + (totFalt ? `\nFaltante: ${num(totFalt)}` : '');
+  if (!confirm('¿Confirmas lo recibido de Recepción?\n\n' + resumen)) return;
+  const estado = (totDan || totFalt) ? 'PENDIENTE_DEVOLUCION' : 'CONFIRMADA';
+  db.collection('bodMovimientos').doc(id).update({
+    'entrega.estado': estado, 'entrega.recibido': recibido, 'entrega.danado': danado, 'entrega.faltante': faltante,
+    'entrega.totalRecibido': totRec, 'entrega.totalDanado': totDan, 'entrega.totalFaltante': totFalt,
+    'entrega.notaProduccion': nota, 'entrega.confirmadoPor': S.user.uid, 'entrega.confirmadoPorNombre': S.nombre,
+    'entrega.confirmadoEn': TS(), 'entrega.confirmadoLocal': Date.now()
+  }).catch(e => alert('❌ No se pudo guardar la confirmación: ' + (e.code === 'permission-denied' ? 'faltan publicar las reglas de Firestore para las entregas.' : e.message)));
+  closeModal();
+  openModal(`<h3>✓ Recepción confirmada</h3>
+    <div class="msg ${totDan || totFalt ? 'warn' : 'ok'}">${totDan ? `Devuelve los ${num(totDan)} dañado(s) a Recepción; ellos confirmarán que los recibieron.` : ''}${totFalt ? ` Recepción revisará ${num(totFalt)} faltante(s) en su bodega.` : ''}${!totDan && !totFalt ? 'Todo cuadró con lo enviado.' : ''}</div>
+    <div class="actions"><button class="btn btn-out" style="flex:1" onclick="imprimirActaEntrega('${id}')">📋 Acta PDF</button>
+      <button class="btn btn-main" style="flex:1" onclick="closeModal()">Listo</button></div>`);
+}
+function guardarConfirmRecepcion(id, ok) {
+  const m = S.movs.find(x => x._id === id); if (!m || m.entrega?.estado !== 'PENDIENTE_RECEPCION') return closeModal();
+  const nota = upper($('#notaEntrega')?.value, 300);
+  if (!ok && !nota) return alert('Escribe en la observación qué no está conforme.');
+  if (!confirm(ok ? '¿Confirmas que Producción retiró exactamente estos insumos?' : '¿Marcar esta salida como NO CONFORME?')) return;
+  db.collection('bodMovimientos').doc(id).update({
+    'entrega.estado': ok ? 'CONFIRMADA' : 'CON_DIFERENCIA', 'entrega.recepcionConforme': ok, 'entrega.notaRecepcion': nota,
+    'entrega.recepcionPor': S.user.uid, 'entrega.recepcionPorNombre': S.nombre, 'entrega.recepcionEn': TS(), 'entrega.recepcionLocal': Date.now()
+  }).catch(e => alert('❌ No se pudo guardar la confirmación: ' + (e.code === 'permission-denied' ? 'faltan publicar las reglas de Firestore para las entregas.' : e.message)));
+  closeModal(); toast(ok ? 'Salida confirmada' : 'Marcada como no conforme');
+}
+function leerFaltantes() {
+  return [...document.querySelectorAll('#tblFalt tbody tr')].map(tr => ({
+    tr, id: tr.dataset.id, f: Number(tr.dataset.f) || 0,
+    enc: Math.max(0, Math.floor(Number(tr.querySelector('[data-enc]').value) || 0))
+  }));
+}
+function recalcFaltantes() {
+  let per = 0, exceso = false;
+  leerFaltantes().forEach(r => {
+    const p = r.f - r.enc, cel = r.tr.querySelector('[data-per]');
+    if (p < 0) { exceso = true; cel.innerHTML = '<span style="color:var(--red);font-weight:800">máx. ' + num(r.f) + '</span>'; }
+    else { per += p; cel.innerHTML = p ? `<span style="color:var(--red);font-weight:800">${num(p)}</span>` : '<span style="color:var(--ok);font-weight:800">0 ✓</span>'; }
+  });
+  const res = $('#resFalt');
+  if (res) res.innerHTML = exceso ? '<div class="msg err">No puedes encontrar más de lo que falta.</div>'
+    : per ? `<div class="msg err">Quedarán <b>${num(per)}</b> unidad(es) como pérdida.</div>` : '<div class="msg ok">Todo lo faltante está en bodega: vuelve al stock.</div>';
+  const o = $('#obsReqF'); if (o) o.textContent = per ? '(obligatoria)' : '';
+  const b = $('#btnDevol'); if (b) b.disabled = exceso;
+}
+function guardarDevolucion(id) {
+  const m = S.movs.find(x => x._id === id); if (!m || m.entrega?.estado !== 'PENDIENTE_DEVOLUCION') return closeModal();
+  const nota = upper($('#notaEntrega')?.value, 300), encontrado = {}, perdido = {};
+  let totEnc = 0, totPer = 0;
+  for (const r of leerFaltantes()) {
+    if (r.enc > r.f) return alert('No puedes encontrar más de lo que falta.');
+    if (r.enc) { encontrado[r.id] = r.enc; totEnc += r.enc; }
+    if (r.f - r.enc) { perdido[r.id] = r.f - r.enc; totPer += r.f - r.enc; }
+  }
+  if (totPer && !nota) return alert('Escribe una observación: explica qué pasó con lo que no apareció.');
+  const dan = Number(m.entrega.totalDanado) || 0;
+  const resumen = (dan ? `Dañados recibidos: ${num(dan)}\n` : '') + (totEnc ? `Faltantes encontrados en bodega (vuelven al stock): ${num(totEnc)}\n` : '') + (totPer ? `Pérdida: ${num(totPer)}\n` : '');
+  if (!confirm('¿Confirmas la revisión?\n\n' + resumen)) return;
+  db.collection('bodMovimientos').doc(id).update({
+    'entrega.estado': totPer > 0 ? 'CON_DIFERENCIA' : 'CONFIRMADA',
+    'entrega.encontrado': encontrado, 'entrega.perdido': perdido, 'entrega.totalEncontrado': totEnc, 'entrega.totalPerdido': totPer,
+    'entrega.notaRecepcion': nota,
+    'entrega.devolucionPor': S.user.uid, 'entrega.devolucionPorNombre': S.nombre, 'entrega.devolucionEn': TS(), 'entrega.devolucionLocal': Date.now()
+  }).catch(e => alert('❌ No se pudo guardar: ' + (e.code === 'permission-denied' ? 'faltan publicar las reglas de Firestore para las entregas.' : e.message)));
+  closeModal(); toast(totPer ? 'Revisión guardada con pérdida' : 'Revisión guardada: todo cuadrado');
+}
+
+/* ── Cancelar envío (Recepción, mientras Producción no lo confirme) ── */
+function puedeCancelarEnvio(m) {
+  return !S.soloLectura && !m.anulado && m.entrega?.origen === 'RECEPCION' && m.entrega.estado === 'PENDIENTE_PRODUCCION' && puede('RECEPCION');
+}
+function pedirCancelarEnvio(id) {
+  const m = S.movs.find(x => x._id === id); if (!m || !puedeCancelarEnvio(m)) return toast('Este envío ya no se puede cancelar.');
+  openModal(`<h3>✖ Cancelar envío a producción</h3>${htmlMov(m, true)}
+    <div class="msg warn">Úsalo solo si el envío se registró por error y los insumos <b>no salieron</b> de la bodega. Las cantidades vuelven al stock y Producción ya no podrá confirmarlo.</div>
+    <label class="lbl">Motivo *</label><input class="in" id="motCancel" style="text-transform:uppercase" placeholder="Ej. CANTIDAD DIGITADA MAL">
+    <div class="actions"><button class="btn btn-out" style="flex:1" onclick="closeModal()">Volver</button>
+      <button class="btn btn-red" style="flex:1" onclick="cancelarEnvio('${id}')">Cancelar envío</button></div>`);
+}
+function cancelarEnvio(id) {
+  const mot = upper($('#motCancel')?.value, 200); if (!mot) return alert('Escribe el motivo.');
+  const m = S.movs.find(x => x._id === id); if (!m || !puedeCancelarEnvio(m)) return closeModal();
+  db.collection('bodMovimientos').doc(id).update({
+    'entrega.estado': 'CANCELADA', 'entrega.motivoCancelacion': mot,
+    'entrega.canceladoPor': S.user.uid, 'entrega.canceladoPorNombre': S.nombre, 'entrega.canceladoEn': TS(), 'entrega.canceladoLocal': Date.now()
+  }).catch(e => alert('❌ No se pudo cancelar: ' + (e.code === 'permission-denied' ? 'Producción ya lo confirmó, o faltan publicar las reglas de Firestore.' : e.message)));
+  closeModal(); toast('Envío cancelado: el stock volvió');
+}
+
+/* ── Acta PDF de entrega Recepción ↔ Producción (A4) ── */
+function imprimirActaEntrega(id) {
+  const m = S.movs.find(x => x._id === id); if (!m || !m.entrega) { toast('Espera un momento y vuelve a intentar.'); return; }
+  const en = m.entrega, deRec = en.origen === 'RECEPCION', confirmadaProd = en.recibido !== undefined;
+  const ms = (ts, loc) => ts?.toMillis?.() || loc || 0;
+  const cuando = (ts, loc) => { const x = ms(ts, loc); return x ? new Date(x).toLocaleString('es-EC', { dateStyle: 'short', timeStyle: 'short' }) : ''; };
+  const est = ESTADOS_ENTREGA[en.estado] || { t: en.estado };
+  const v = (mapa, i) => Number(mapa?.[i.id]) || 0;
+  let thead, filas, pieTabla;
+  if (deRec) {
+    const conF = Number(en.totalFaltante) > 0, revF = en.perdido !== undefined;
+    const colsF = i => conF ? `<td class="r">${revF ? num(v(en.encontrado, i)) : '—'}</td><td class="r ${v(en.perdido, i) ? 'rojo' : ''}">${revF ? num(v(en.perdido, i)) : '—'}</td>` : '';
+    thead = '<th class="c">#</th><th>Producto</th><th>Categoría</th><th class="r">Enviado</th><th class="r">Recibido</th><th class="r">Dañado (devuelto)</th><th class="r">Faltante</th>' + (conF ? '<th class="r">Regresó a bodega</th><th class="r">Pérdida</th>' : '');
+    filas = (m.items || []).map((i, k) => `<tr><td class="c">${k + 1}</td><td>${esc(i.nombre)}</td><td>${esc(i.categoria || '')}</td><td class="r">${num(i.cantidad)}</td>
+      <td class="r">${confirmadaProd ? num(v(en.recibido, i)) : '—'}</td><td class="r">${confirmadaProd ? num(v(en.danado, i)) : '—'}</td><td class="r">${confirmadaProd ? num(v(en.faltante, i)) : '—'}</td>${colsF(i)}</tr>`).join('');
+    pieTabla = `<tr class="tot"><td></td><td colspan="2">TOTAL</td><td class="r">${num(m.totalUnidades)}</td><td class="r">${confirmadaProd ? num(en.totalRecibido) : '—'}</td><td class="r">${confirmadaProd ? num(en.totalDanado) : '—'}</td><td class="r">${confirmadaProd ? num(en.totalFaltante) : '—'}</td>${conF ? `<td class="r">${revF ? num(en.totalEncontrado) : '—'}</td><td class="r">${revF ? num(en.totalPerdido) : '—'}</td>` : ''}</tr>`;
+  } else {
+    thead = '<th class="c">#</th><th>Producto</th><th>Categoría</th><th class="r">Retirado</th>';
+    filas = (m.items || []).map((i, k) => `<tr><td class="c">${k + 1}</td><td>${esc(i.nombre)}</td><td>${esc(i.categoria || '')}</td><td class="r">${num(i.cantidad)}</td></tr>`).join('');
+    pieTabla = `<tr class="tot"><td></td><td colspan="2">TOTAL</td><td class="r">${num(m.totalUnidades)}</td></tr>`;
+  }
+  const dato = (l, x) => x ? `<div class="d"><span>${l}</span><b>${x}</b></div>` : '';
+  const firmas = deRec
+    ? [['ENTREGA RECEPCIÓN', m.creadoPorNombre], ['RECIBE PRODUCCIÓN', en.confirmadoPorNombre], ...(Number(en.totalDanado) > 0 || Number(en.totalFaltante) > 0 ? [['REVISA DAÑADOS/FALTANTES (RECEPCIÓN)', en.devolucionPorNombre]] : [])]
+    : [['RETIRA PRODUCCIÓN', m.creadoPorNombre], ['CONFIRMA RECEPCIÓN', en.recepcionPorNombre]];
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Acta de entrega ${esc(m._id.slice(0, 8).toUpperCase())}</title><style>
+    @page{size:A4;margin:15mm}*{margin:0;padding:0;box-sizing:border-box}body{font:12.5px/1.45 Arial,sans-serif;color:#000}
+    .head{display:flex;align-items:center;justify-content:space-between;border-bottom:2px solid #0b4f4a;padding-bottom:10px;margin-bottom:14px}
+    .logo{height:60px;width:auto}.tt{text-align:right}.tt h1{font-size:17px;color:#0b4f4a}.tt h2{font-size:13px;font-weight:normal;margin-top:2px}
+    .estado{margin:0 0 12px;padding:7px;border:2px solid ${en.estado === 'CONFIRMADA' ? '#047857' : en.estado === 'CON_DIFERENCIA' ? '#b00' : '#b45309'};color:${en.estado === 'CONFIRMADA' ? '#047857' : en.estado === 'CON_DIFERENCIA' ? '#b00' : '#b45309'};text-align:center;font-weight:bold;font-size:14px}
+    .datos{display:grid;grid-template-columns:1fr 1fr;gap:6px 24px;margin-bottom:16px}.d span{display:block;font-size:10px;color:#555;text-transform:uppercase;letter-spacing:.04em}.d b{font-size:12.5px}
+    table{width:100%;border-collapse:collapse}th{background:#0b4f4a;color:#fff;font-size:10.5px;text-transform:uppercase;text-align:left;padding:6px 7px}
+    td{border-bottom:1px solid #ccc;padding:6px 7px;vertical-align:top}.c{text-align:center;width:32px}.r{text-align:right;font-weight:bold;white-space:nowrap}th.r{text-align:right}.rojo{color:#b00}
+    .tot td{border-top:2px solid #000;border-bottom:0;font-weight:bold;font-size:13px}.obs{margin-top:10px}.anul{margin:10px 0;padding:6px;border:2px solid #b00;color:#b00;text-align:center;font-weight:bold}
+    .firmas{display:flex;gap:30px;margin-top:70px}.f{flex:1;border-top:1px solid #000;text-align:center;font-size:10.5px;padding-top:4px}.f b{display:block;font-size:12.5px;min-height:16px}
+    .pie{margin-top:30px;font-size:10px;color:#777;text-align:center}
+    </style></head><body>
+    <div class="head"><img class="logo" src="${new URL('logo-luanaqua.png', location.href).href}" alt="AQUA LUAN" onerror="this.outerHTML='<h1>AQUA LUAN</h1>'">
+      <div class="tt"><h1>ACTA DE ENTREGA · RECEPCIÓN ↔ PRODUCCIÓN</h1><h2>N° ${esc(m._id.slice(0, 8).toUpperCase())}</h2></div></div>
+    ${m.anulado ? '<div class="anul">*** ANULADO ***</div>' : ''}
+    <div class="estado">${esc(est.t.replace('✓ ', '').replace('⚠ ', '').replace('✖ ', '').toUpperCase())}</div>
+    <div class="datos">${dato('Fecha', fmtFecha(m.fecha))}${dato('Tipo', deRec ? 'Recepción envía a Producción' : 'Producción retira de Recepción')}
+      ${dato(deRec ? 'Envió (Recepción)' : 'Retiró (Producción)', esc((m.creadoPorNombre || '') + ' · ' + fmtHora(msDe(m))))}
+      ${deRec ? dato('Confirmó (Producción)', en.confirmadoPorNombre ? esc(en.confirmadoPorNombre + ' · ' + cuando(en.confirmadoEn, en.confirmadoLocal)) : 'PENDIENTE')
+              : dato('Confirmó (Recepción)', en.recepcionPorNombre ? esc(en.recepcionPorNombre + ' · ' + cuando(en.recepcionEn, en.recepcionLocal) + (en.recepcionConforme === false ? ' · NO CONFORME' : ' · CONFORME')) : 'PENDIENTE')}
+      ${en.estado === 'CANCELADA' ? dato('Cancelado por Recepción', esc((en.canceladoPorNombre || '') + ' · ' + cuando(en.canceladoEn, en.canceladoLocal) + ' · ' + (en.motivoCancelacion || ''))) : ''}
+      ${deRec && (Number(en.totalDanado) > 0 || Number(en.totalFaltante) > 0) ? dato('Revisó dañados/faltantes (Recepción)', en.devolucionPorNombre ? esc(en.devolucionPorNombre + ' · ' + cuando(en.devolucionEn, en.devolucionLocal)) : 'PENDIENTE') : ''}</div>
+    <table><thead><tr>${thead}</tr></thead><tbody>${filas}</tbody><tfoot>${pieTabla}</tfoot></table>
+    ${m.nota ? `<div class="obs"><b>Obs. ${deRec ? 'Recepción' : 'Producción'}:</b> ${esc(m.nota)}</div>` : ''}
+    ${en.notaProduccion ? `<div class="obs"><b>Obs. Producción:</b> ${esc(en.notaProduccion)}</div>` : ''}
+    ${en.notaRecepcion ? `<div class="obs"><b>Obs. Recepción:</b> ${esc(en.notaRecepcion)}</div>` : ''}
+    <div class="firmas">${firmas.map(([t, n]) => `<div class="f"><b>${esc(n || ' ')}</b>${t}</div>`).join('')}</div>
+    <div class="pie">Aqua Luan · Bodega · Generado ${esc(new Date().toLocaleString('es-EC', { dateStyle: 'short', timeStyle: 'short' }))}</div>
     <script>window.onload=function(){setTimeout(function(){window.print()},300)}<\/script></body></html>`;
   const w = window.open('', '_blank');
   if (!w) { alert('El navegador bloqueó la ventana de impresión. Permite ventanas emergentes para esta app.'); return; }
