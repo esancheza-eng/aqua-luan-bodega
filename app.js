@@ -42,7 +42,7 @@ const _secApp = firebase.initializeApp(firebaseConfig, 'secundariaBodega');
 const _secAuth = _secApp.auth();
 const TS = () => firebase.firestore.FieldValue.serverTimestamp();
 
-const APP_VERSION = 'bodega-3.2.6';
+const APP_VERSION = 'bodega-3.2.7';
 const DOMINIO_LOGIN = '@luanaqua.app';
 function emailDeUsuario(u) {
   const limpio = String(u || '').trim().toLowerCase().replace(/[^a-z0-9._-]/g, '');
@@ -78,6 +78,11 @@ const CATALOGO_INICIAL = {
   ETIQUETAS: ['PACA 400', 'PACA 600', 'PACA 625', 'PACA 1L', 'GALON', 'BOTELLON', 'SELLO LUAN', 'SELLO GENERICO',
               'SELLO PREMIUM', 'ETIQUETA PREMIUM', 'ETIQUETA GALON 5 LITRO', 'ROLLOS DE EMPAQUE']
 };
+/* [AUTORIZACIÓN] Cuando Producción saca sin Recepción, debe indicar quién autoriza y por qué */
+const AUTORIZA_OPCIONES = ['DUEÑO', 'ADMINISTRADOR', 'OTRO'];
+const MOTIVOS_SALIDA = ['RECEPCIÓN AUSENTE', 'URGENCIA DE PRODUCCIÓN', 'FUERA DE HORARIO', 'OTRO'];
+function valorAutoriza(f) { return f.campos.autoriza === 'OTRO' ? upper(f.campos.autorizaOtro, 60) : (f.campos.autoriza || ''); }
+function valorMotivoSalida(f) { return f.campos.motivoSalida === 'OTRO' ? upper(f.campos.motivoSalidaOtro, 120) : (f.campos.motivoSalida || ''); }
 const MOTIVOS_DANO = ['ROTO', 'DAÑADO', 'DERRAMADO', 'MAL SELLADO', 'CONTAMINADO', 'OTRO'];
 
 /* ── Estado ──────────────────────────────────────────────────────────── */
@@ -377,7 +382,8 @@ function cfgDe(tab) {
     }
     case 'PRODUCCION': {
       const env = S.modo.PRODUCCION === 'ENVASES';
-      return { key: env ? 'PRODUCCION_ENV' : 'PRODUCCION', etapa: 'PRODUCCION', area: env ? 'ENVASES' : 'INSUMOS', limitar: true, campos: ['fecha', 'nota'],
+      return { key: env ? 'PRODUCCION_ENV' : 'PRODUCCION', etapa: 'PRODUCCION', area: env ? 'ENVASES' : 'INSUMOS', limitar: true,
+        campos: !env && requiereAvisoRecepcion() ? ['autoriza', 'motivoSalida', 'fecha', 'nota'] : ['fecha', 'nota'],
         seg: { modo: 'PRODUCCION', ops: [['INSUMOS', 'Insumos'], ['ENVASES', 'Envases vacíos']] } };
     }
     case 'TERMINADO':  return { key: 'TERMINADO', etapa: 'TERMINADO', area: 'TERMINADO', limitar: false, campos: ['fecha', 'nota'] };
@@ -445,6 +451,13 @@ function campoHTML(c, f, campo) {
     case 'asesor': return `<div><label class="lbl">Asesor / ruta *</label><select class="in" onchange="setCampo('${c.key}','asesor',this.value)">
         <option value="">— Selecciona el asesor —</option>${S.asesores.map(r => `<option value="${esc(r)}" ${r === v ? 'selected' : ''}>${esc(r)}</option>`).join('')}</select>
         ${S.asesores.length ? '' : '<div class="msg warn">No se pudo cargar la lista de asesores.</div>'}</div>`;
+    case 'autoriza': case 'motivoSalida': {
+      const ops = campo === 'autoriza' ? AUTORIZA_OPCIONES : MOTIVOS_SALIDA, otro = campo + 'Otro';
+      return `<div><label class="lbl">${campo === 'autoriza' ? 'Autorizado por *' : 'Motivo de la salida *'}</label>
+        <select class="in" onchange="setCampo('${c.key}','${campo}',this.value);this.nextElementSibling.style.display=this.value==='OTRO'?'':'none'">
+          <option value="">— Selecciona —</option>${ops.map(o => `<option value="${esc(o)}" ${o === v ? 'selected' : ''}>${esc(o === 'OTRO' ? 'OTRO (escribir)' : o)}</option>`).join('')}</select>
+        <input class="in" style="margin-top:6px;text-transform:uppercase;${v === 'OTRO' ? '' : 'display:none'}" value="${esc(f.campos[otro] || '')}" placeholder="${campo === 'autoriza' ? 'Nombre de quien autoriza' : 'Escribe el motivo'}" oninput="setCampo('${c.key}','${otro}',this.value)"></div>`;
+    }
     case 'motivo': return `<div><label class="lbl">Motivo</label><select class="in" onchange="setCampo('${c.key}','motivo',this.value)">
         ${MOTIVOS_DANO.map(m => `<option ${m === v ? 'selected' : ''}>${m}</option>`).join('')}</select></div>`;
   }
@@ -561,6 +574,8 @@ function revisar(tab) {
   if (f.campos.fecha > hoy()) errores.push('La fecha no puede ser futura.');
   if (c.campos.includes('proveedor') && !upper(f.campos.proveedor)) errores.push('Escribe el proveedor.');
   if (c.campos.includes('asesor') && !f.campos.asesor) errores.push('Selecciona el asesor.');
+  if (c.campos.includes('autoriza') && !valorAutoriza(f)) errores.push('Falta quién autoriza la salida. Recepción no está; indica quién te autorizó.');
+  if (c.campos.includes('motivoSalida') && !valorMotivoSalida(f)) errores.push('Falta el motivo de la salida.');
   if (c.limitar) elegidos.filter(it => f.qty[it.id] > it.stock).forEach(it =>
     errores.push(`${it.categoria ? it.categoria + ' · ' : ''}${it.nombre}: pides ${num(f.qty[it.id])} pero solo hay ${num(it.stock)}.`));
   const ajustes = c.conteo ? elegidos.map(it => ({ it, delta: f.qty[it.id] - it.stock })).filter(x => x.delta !== 0) : null;
@@ -591,6 +606,7 @@ function revisar(tab) {
       ${f.campos.asesor ? `<br>Asesor: <b style="font-size:16px">${esc(f.campos.asesor)}</b>` : ''}
       ${c.campos.includes('proveedor') ? `<br>Proveedor: <b>${esc(upper(f.campos.proveedor))}</b>${f.campos.documento ? ' · Doc: <b>' + esc(upper(f.campos.documento)) + '</b>' : ''}` : ''}
       ${c.etapa === 'DANO' ? `<br>Motivo: <b>${esc(f.campos.motivo)}</b>` : ''}
+      ${c.campos.includes('autoriza') ? `<br>Autorizó: <b>${esc(valorAutoriza(f))}</b> · Motivo: <b>${esc(valorMotivoSalida(f))}</b>` : ''}
       ${f.campos.nota ? `<br>Obs.: ${esc(upper(f.campos.nota, 300))}` : ''}</div>
     ${avisoDev}
     <div class="tbl-wrap"><table class="tbl"><thead><tr>${c.conteo ? '<th>Ítem</th><th class="n">Sistema</th><th class="n">Conteo</th><th class="n">Ajuste</th>' : '<th>Ítem</th><th class="n">Cantidad</th>'}</tr></thead>
@@ -622,7 +638,7 @@ function confirmarGuardar(tab) {
   if (c.etapa === 'DANO') doc.motivo = f.campos.motivo || 'OTRO';
   /* [ENTREGA] Recepción envía → Producción confirma; Producción saca sola → Recepción confirma */
   if (c.envio) doc.entrega = { origen: 'RECEPCION', estado: 'PENDIENTE_PRODUCCION' };
-  else if (c.etapa === 'PRODUCCION' && c.area === 'INSUMOS' && requiereAvisoRecepcion()) doc.entrega = { origen: 'PRODUCCION', estado: 'PENDIENTE_RECEPCION' };
+  else if (c.etapa === 'PRODUCCION' && c.area === 'INSUMOS' && requiereAvisoRecepcion()) doc.entrega = { origen: 'PRODUCCION', estado: 'PENDIENTE_RECEPCION', autorizadoPor: valorAutoriza(f), motivoSalida: valorMotivoSalida(f) };
 
   const ref = db.collection('bodMovimientos').doc();
   ref.set(doc).catch(err => {
@@ -731,6 +747,7 @@ function htmlMov(m, sinAcciones) {
     m.ruta ? `Asesor: <b>${esc(m.ruta)}</b>` : '',
     m.proveedor ? `Proveedor: <b>${esc(m.proveedor)}</b>${m.documento ? ' · Doc ' + esc(m.documento) : ''}` : '',
     m.motivo ? `Motivo: <b>${esc(m.motivo)}</b>` : '',
+    m.entrega?.autorizadoPor ? `Autorizó: <b>${esc(m.entrega.autorizadoPor)}</b> (${esc(m.entrega.motivoSalida || '')})` : '',
     `Por: <b>${esc(m.creadoPorNombre || '-')}</b>`,
     m.nota ? `Obs.: ${esc(m.nota)}` : '',
     m.entrega?.estado === 'CANCELADA' ? `<span style="color:var(--muted)">ENVÍO CANCELADO por ${esc(m.entrega.canceladoPorNombre || '-')}: ${esc(m.entrega.motivoCancelacion || '')} (no cuenta en el stock)</span>` : '',
@@ -975,7 +992,7 @@ function htmlPendientesEntrega(tab) {
   if (!miTurno.length && !otraParte.length) return '';
   const fila = (m, conBoton) => `<div class="mov">
       <div class="mov-top">${badgeEntrega(m)}<span class="when">${fmtFecha(m.fecha)} ${fmtHora(msDe(m))}</span></div>
-      <div class="mov-meta">${m.entrega.origen === 'RECEPCION' ? 'Envió Recepción' : 'Retiró Producción'}: <b>${esc(m.creadoPorNombre || '-')}</b> · ${num(m.totalUnidades)} unidades${m.nota ? ' · Obs.: ' + esc(m.nota) : ''}</div>
+      <div class="mov-meta">${m.entrega.origen === 'RECEPCION' ? 'Envió Recepción' : 'Retiró Producción'}: <b>${esc(m.creadoPorNombre || '-')}</b>${m.entrega.autorizadoPor ? ' · Autorizó: <b>' + esc(m.entrega.autorizadoPor) + '</b> (' + esc(m.entrega.motivoSalida || '') + ')' : ''} · ${num(m.totalUnidades)} unidades${m.nota ? ' · Obs.: ' + esc(m.nota) : ''}</div>
       <div class="mov-items">${chipsEntrega(m)}</div>
       ${!conBoton && puedeCancelarEnvio(m) ? `<div class="actions" style="margin-top:8px"><button class="btn btn-out btn-sm" style="color:var(--red)" onclick="pedirCancelarEnvio('${m._id}')">✖ Cancelar envío</button></div>` : ''}
       ${conBoton ? `<div class="actions" style="margin-top:8px"><button class="btn btn-main btn-sm" onclick="abrirConfirmarEntrega('${m._id}')">${esc(accionEntrega(m))}</button>
@@ -1001,7 +1018,7 @@ function abrirConfirmarEntrega(id) {
   if (!accionEntrega(m)) { toast('Esta entrega ya fue confirmada o no te corresponde.'); return; }
   const est = m.entrega.estado; _entregaAbierta = id;
   const cab = `<div class="mov-meta">Fecha: <b>${fmtFecha(m.fecha)}</b> ${fmtHora(msDe(m))} · N° ${esc(m._id.slice(0, 8).toUpperCase())}<br>
-    ${m.entrega.origen === 'RECEPCION' ? 'Envió Recepción' : 'Retiró Producción'}: <b>${esc(m.creadoPorNombre || '-')}</b>${m.nota ? '<br>Obs.: ' + esc(m.nota) : ''}</div>`;
+    ${m.entrega.origen === 'RECEPCION' ? 'Envió Recepción' : 'Retiró Producción'}: <b>${esc(m.creadoPorNombre || '-')}</b>${m.entrega.autorizadoPor ? '<br>Autorizó: <b>' + esc(m.entrega.autorizadoPor) + '</b> · Motivo: <b>' + esc(m.entrega.motivoSalida || '') + '</b>' : ''}${m.nota ? '<br>Obs.: ' + esc(m.nota) : ''}</div>`;
   if (est === 'PENDIENTE_PRODUCCION') {
     const filas = (m.items || []).map((i, k) => `<tr data-k="${k}">
       <td>${esc(i.nombre)}${i.categoria ? `<br><small style="color:var(--muted)">${esc(i.categoria)}</small>` : ''}</td>
@@ -1206,7 +1223,7 @@ function imprimirActaEntrega(id) {
   const dato = (l, x) => x ? `<div class="d"><span>${l}</span><b>${x}</b></div>` : '';
   const firmas = deRec
     ? [['ENTREGA RECEPCIÓN', m.creadoPorNombre], ['RECIBE PRODUCCIÓN', en.confirmadoPorNombre], ...(Number(en.totalDanado) > 0 || Number(en.totalFaltante) > 0 ? [['REVISA DAÑADOS/FALTANTES (RECEPCIÓN)', en.devolucionPorNombre]] : [])]
-    : [['RETIRA PRODUCCIÓN', m.creadoPorNombre], ['CONFIRMA RECEPCIÓN', en.recepcionPorNombre]];
+    : [['RETIRA PRODUCCIÓN', m.creadoPorNombre], ...(en.autorizadoPor ? [['AUTORIZA', en.autorizadoPor]] : []), ['CONFIRMA RECEPCIÓN', en.recepcionPorNombre]];
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>Acta de entrega ${esc(m._id.slice(0, 8).toUpperCase())}</title><style>
     @page{size:A4;margin:15mm}*{margin:0;padding:0;box-sizing:border-box}body{font:12.5px/1.45 Arial,sans-serif;color:#000}
     .head{display:flex;align-items:center;justify-content:space-between;border-bottom:2px solid #0b4f4a;padding-bottom:10px;margin-bottom:14px}
@@ -1223,7 +1240,7 @@ function imprimirActaEntrega(id) {
       <div class="tt"><h1>ACTA DE ENTREGA · RECEPCIÓN ↔ PRODUCCIÓN</h1><h2>N° ${esc(m._id.slice(0, 8).toUpperCase())}</h2></div></div>
     ${m.anulado ? '<div class="anul">*** ANULADO ***</div>' : ''}
     <div class="estado">${esc(est.t.replace('✓ ', '').replace('⚠ ', '').replace('✖ ', '').toUpperCase())}</div>
-    <div class="datos">${dato('Fecha', fmtFecha(m.fecha))}${dato('Tipo', deRec ? 'Recepción envía a Producción' : 'Producción retira de Recepción')}
+    <div class="datos">${dato('Fecha', fmtFecha(m.fecha))}${dato('Tipo', deRec ? 'Recepción envía a Producción' : 'Producción retira de Recepción')}${en.autorizadoPor ? dato('Autorizó', esc(en.autorizadoPor)) + dato('Motivo de la salida', esc(en.motivoSalida || '')) : ''}
       ${dato(deRec ? 'Envió (Recepción)' : 'Retiró (Producción)', esc((m.creadoPorNombre || '') + ' · ' + fmtHora(msDe(m))))}
       ${deRec ? dato('Confirmó (Producción)', en.confirmadoPorNombre ? esc(en.confirmadoPorNombre + ' · ' + cuando(en.confirmadoEn, en.confirmadoLocal)) : 'PENDIENTE')
               : dato('Confirmó (Recepción)', en.recepcionPorNombre ? esc(en.recepcionPorNombre + ' · ' + cuando(en.recepcionEn, en.recepcionLocal) + (en.recepcionConforme === false ? ' · NO CONFORME' : ' · CONFORME')) : 'PENDIENTE')}
