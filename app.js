@@ -42,7 +42,7 @@ const _secApp = firebase.initializeApp(firebaseConfig, 'secundariaBodega');
 const _secAuth = _secApp.auth();
 const TS = () => firebase.firestore.FieldValue.serverTimestamp();
 
-const APP_VERSION = 'bodega-3.2.3';
+const APP_VERSION = 'bodega-3.2.4';
 const DOMINIO_LOGIN = '@luanaqua.app';
 function emailDeUsuario(u) {
   const limpio = String(u || '').trim().toLowerCase().replace(/[^a-z0-9._-]/g, '');
@@ -471,7 +471,7 @@ function htmlFormulario(tab) {
   } else {
     let grupos = c.area === 'INSUMOS' ? CATEGORIAS.map(cat => [cat, items.filter(i => i.categoria === cat)]).filter(g => g[1].length) : [['PRODUCTOS', items]];
     lista = `<input class="in picker-search" placeholder="Buscar…" value="${esc(f.q)}" oninput="filtrar('${c.key}',this.value)">` +
-      grupos.map(([cat, arr]) => `<div class="cat" data-cat><div class="cat-title"><span>${esc(cat)}</span><span>${arr.length}</span></div>
+      grupos.map(([cat, arr]) => `<div class="cat" data-cat><div class="cat-title"><span>${esc((tab === 'RECEPCION' || tab === 'DANO') && CATEGORIAS.includes(cat) ? cat + ' POR UNIDADES' : cat)}</span><span>${arr.length}</span></div>
         ${arr.map(it => {
           const v = f.qty[it.id];
           const visible = !f.q || it.nombre.includes(f.q.toUpperCase());
@@ -689,7 +689,7 @@ function renderStock() {
       <div class="kpi"><span>Stock total de insumos</span><b>${num(totGen.stock)}</b><small>${totCat.map(x => esc(x.cat) + ': ' + num(x.t.stock)).join(' · ')}</small></div></div>` +
       (items.length ? CATEGORIAS.map(cat => {
         const arr = items.filter(i => i.categoria === cat); if (!arr.length) return '';
-        return `<div class="card"><h2>${cat}</h2><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Ítem</th><th class="n">Recibido</th><th class="n">A prod.</th><th class="n">Dañado</th><th class="n">Pérdida</th><th class="n">Ajuste</th><th class="n">Stock</th><th class="n">Mín.</th></tr></thead><tbody>
+        return `<div class="card"><h2>${cat} POR UNIDADES</h2><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Ítem</th><th class="n">Recibido</th><th class="n">A prod.</th><th class="n">Dañado</th><th class="n">Pérdida</th><th class="n">Ajuste</th><th class="n">Stock</th><th class="n">Mín.</th></tr></thead><tbody>
           ${arr.map(i => { const s = st.ins[i.id] || { rec: 0, prod: 0, dano: 0, perd: 0, aj: 0, stock: 0 }; const low = (i.minimo > 0 && s.stock <= i.minimo) || s.stock < 0;
             return `<tr class="${low ? 'low' : ''}"><td><b>${esc(i.nombre)}</b></td><td class="n">${num(s.rec)}</td><td class="n">${num(s.prod)}</td><td class="n">${num(s.dano)}</td><td class="n">${num(s.perd || 0)}</td><td class="n">${s.aj ? (s.aj > 0 ? '+' : '') + num(s.aj) : '0'}</td><td class="n" style="font-weight:800;color:${low ? 'var(--red)' : 'var(--text)'}">${num(s.stock)}</td><td class="n">${i.minimo ? num(i.minimo) : '-'}</td></tr>`; }).join('')}
           </tbody>${(() => { const t = sumar(arr); return `<tfoot><tr class="tot"><td>TOTAL ${esc(cat)}</td><td class="n">${num(t.rec)}</td><td class="n">${num(t.prod)}</td><td class="n">${num(t.dano)}</td><td class="n">${num(t.perd)}</td><td class="n">${fmtAj(t.aj)}</td><td class="n">${num(t.stock)}</td><td class="n">${num(sumMin(arr))}</td></tr></tfoot>`; })()}</table></div></div>`;
