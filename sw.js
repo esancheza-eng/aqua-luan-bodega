@@ -1,6 +1,6 @@
 /* Aqua Luan Bodega — service worker. Sube CACHE_NAME en cada versión nueva. */
-const CACHE_NAME = 'luan-bodega-v3.2.4';
-const APP_SHELL = ['./', './index.html', './app.js?v=3.2.4', './manifest.json', './logo-luanaqua.png'];
+const CACHE_NAME = 'luan-bodega-v3.2.5';
+const APP_SHELL = ['./', './index.html', './app.js?v=3.2.5', './manifest.json', './logo-luanaqua.png'];
 const CDN = [
   'https://www.gstatic.com/firebasejs/12.11.0/firebase-app-compat.js',
   'https://www.gstatic.com/firebasejs/12.11.0/firebase-auth-compat.js',

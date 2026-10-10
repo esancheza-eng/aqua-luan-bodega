@@ -42,7 +42,7 @@ const _secApp = firebase.initializeApp(firebaseConfig, 'secundariaBodega');
 const _secAuth = _secApp.auth();
 const TS = () => firebase.firestore.FieldValue.serverTimestamp();
 
-const APP_VERSION = 'bodega-3.2.4';
+const APP_VERSION = 'bodega-3.2.5';
 const DOMINIO_LOGIN = '@luanaqua.app';
 function emailDeUsuario(u) {
   const limpio = String(u || '').trim().toLowerCase().replace(/[^a-z0-9._-]/g, '');
@@ -471,7 +471,7 @@ function htmlFormulario(tab) {
   } else {
     let grupos = c.area === 'INSUMOS' ? CATEGORIAS.map(cat => [cat, items.filter(i => i.categoria === cat)]).filter(g => g[1].length) : [['PRODUCTOS', items]];
     lista = `<input class="in picker-search" placeholder="Buscar…" value="${esc(f.q)}" oninput="filtrar('${c.key}',this.value)">` +
-      grupos.map(([cat, arr]) => `<div class="cat" data-cat><div class="cat-title"><span>${esc((tab === 'RECEPCION' || tab === 'DANO') && CATEGORIAS.includes(cat) ? cat + ' POR UNIDADES' : cat)}</span><span>${arr.length}</span></div>
+      grupos.map(([cat, arr]) => `<div class="cat" data-cat><div class="cat-title"><span>${esc((tab === 'RECEPCION' || tab === 'PRODUCCION' || tab === 'DANO') && CATEGORIAS.includes(cat) ? cat + ' POR UNIDADES' : cat)}</span><span>${arr.length}</span></div>
         ${arr.map(it => {
           const v = f.qty[it.id];
           const visible = !f.q || it.nombre.includes(f.q.toUpperCase());
