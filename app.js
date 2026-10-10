@@ -42,7 +42,7 @@ const _secApp = firebase.initializeApp(firebaseConfig, 'secundariaBodega');
 const _secAuth = _secApp.auth();
 const TS = () => firebase.firestore.FieldValue.serverTimestamp();
 
-const APP_VERSION = 'bodega-3.2.1';
+const APP_VERSION = 'bodega-3.2.2';
 const DOMINIO_LOGIN = '@luanaqua.app';
 function emailDeUsuario(u) {
   const limpio = String(u || '').trim().toLowerCase().replace(/[^a-z0-9._-]/g, '');
@@ -1007,13 +1007,12 @@ function abrirConfirmarEntrega(id) {
       <td>${esc(i.nombre)}${i.categoria ? `<br><small style="color:var(--muted)">${esc(i.categoria)}</small>` : ''}</td>
       <td class="n"><b>${num(i.cantidad)}</b></td>
       <td class="n"><input class="in" type="number" inputmode="numeric" min="0" step="1" style="width:70px;padding:6px;text-align:right" data-rec value="${Number(i.cantidad) || 0}" oninput="recalcEntrega()"></td>
-      <td class="n"><input class="in" type="number" inputmode="numeric" min="0" step="1" style="width:70px;padding:6px;text-align:right" data-dan value="" placeholder="0" oninput="recalcEntrega()"></td>
       <td class="n" data-dif>✓</td></tr>`).join('');
     openModal(`<h3>✔ Confirmar lo recibido de Recepción</h3>${cab}
-      <div class="msg info">Cuenta cada producto. En <b>Recibido</b> pon lo que llegó en buen estado y en <b>Dañado</b> lo que vino roto o dañado (eso se devuelve a Recepción).</div>
-      <div class="tbl-wrap"><table class="tbl" id="tblEntrega"><thead><tr><th>Producto</th><th class="n">Enviado</th><th class="n">Recibido</th><th class="n">Dañado</th><th class="n">Cuadre</th></tr></thead><tbody>${filas}</tbody></table></div>
+      <div class="msg info">Cuenta cada producto. En <b>Recibido</b> pon lo que llegó en buen estado. Lo que no recibas, Recepción lo revisa en su bodega.</div>
+      <div class="tbl-wrap"><table class="tbl" id="tblEntrega"><thead><tr><th>Producto</th><th class="n">Enviado</th><th class="n">Recibido</th><th class="n">Cuadre</th></tr></thead><tbody>${filas}</tbody></table></div>
       <div id="resEntrega"></div>
-      <label class="lbl">Observación <span id="obsReq" class="hint"></span></label><textarea class="in" id="notaEntrega" style="text-transform:uppercase" placeholder="Ej. 1 TAPA ROTA, ETIQUETA MOJADA…"></textarea>
+      <label class="lbl">Observación <span id="obsReq" class="hint"></span></label><textarea class="in" id="notaEntrega" style="text-transform:uppercase" placeholder="Ej. LLEGARON 2 MENOS…"></textarea>
       <div class="actions"><button class="btn btn-out" style="flex:1" onclick="closeModal()">Cancelar</button>
         <button class="btn btn-main" style="flex:2" id="btnEntrega" onclick="guardarConfirmProduccion('${id}')">Confirmar recepción</button></div>`);
     recalcEntrega();
@@ -1057,7 +1056,7 @@ function leerTablaEntrega() {
   return [...document.querySelectorAll('#tblEntrega tbody tr')].map(tr => ({
     k: Number(tr.dataset.k), tr,
     rec: Math.max(0, Math.floor(Number(tr.querySelector('[data-rec]').value) || 0)),
-    dan: Math.max(0, Math.floor(Number(tr.querySelector('[data-dan]').value) || 0))
+    dan: Math.max(0, Math.floor(Number(tr.querySelector('[data-dan]')?.value) || 0))
   }));
 }
 function recalcEntrega() {
@@ -1071,9 +1070,8 @@ function recalcEntrega() {
     else { exceso += -dif; cel.innerHTML = `<span style="color:var(--red);font-weight:800">sobran ${num(-dif)}</span>`; }
   });
   const res = $('#resEntrega');
-  res.innerHTML = exceso ? `<div class="msg err">Recibido + dañado no puede ser mayor a lo enviado. Corrige las cantidades.</div>`
-    : falt ? `<div class="msg err">Faltan <b>${num(falt)}</b> unidad(es): no llegaron ni buenas ni dañadas. Recepción las buscará en su bodega: lo que aparezca vuelve al stock y lo que no, queda como pérdida.</div>`
-    : dan ? `<div class="msg warn"><b>${num(dan)}</b> unidad(es) dañada(s) se devolverán a Recepción.</div>`
+  res.innerHTML = exceso ? `<div class="msg err">Lo recibido no puede ser mayor a lo enviado. Corrige las cantidades.</div>`
+    : falt ? `<div class="msg err">Faltan <b>${num(falt)}</b> unidad(es) por recibir. Recepción las buscará en su bodega: lo que aparezca vuelve al stock y lo que no, queda como pérdida.</div>`
     : `<div class="msg ok">Todo cuadra con lo enviado.</div>`;
   $('#obsReq').textContent = (falt || dan) ? '(obligatoria)' : '';
   $('#btnEntrega').disabled = exceso > 0;
@@ -1085,12 +1083,12 @@ function guardarConfirmProduccion(id) {
   let totRec = 0, totDan = 0, totFalt = 0;
   for (const r of filas) {
     const it = m.items[r.k], env = Number(it.cantidad) || 0, dif = env - r.rec - r.dan;
-    if (dif < 0) return alert(`${it.nombre}: recibido + dañado (${r.rec + r.dan}) es mayor a lo enviado (${env}).`);
+    if (dif < 0) return alert(`${it.nombre}: lo recibido (${r.rec + r.dan}) es mayor a lo enviado (${env}).`);
     recibido[it.id] = r.rec; totRec += r.rec;
     if (r.dan) { danado[it.id] = r.dan; totDan += r.dan; }
     if (dif) { faltante[it.id] = dif; totFalt += dif; }
   }
-  if ((totDan || totFalt) && !nota) return alert('Escribe una observación: explica qué vino dañado o qué faltó.');
+  if ((totDan || totFalt) && !nota) return alert('Escribe una observación: explica qué faltó.');
   const resumen = `Recibido en buen estado: ${num(totRec)}` + (totDan ? `\nDañado (se devuelve a Recepción): ${num(totDan)}` : '') + (totFalt ? `\nFaltante: ${num(totFalt)}` : '');
   if (!confirm('¿Confirmas lo recibido de Recepción?\n\n' + resumen)) return;
   const estado = (totDan || totFalt) ? 'PENDIENTE_DEVOLUCION' : 'CONFIRMADA';
