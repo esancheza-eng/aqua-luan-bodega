@@ -42,7 +42,7 @@ const _secApp = firebase.initializeApp(firebaseConfig, 'secundariaBodega');
 const _secAuth = _secApp.auth();
 const TS = () => firebase.firestore.FieldValue.serverTimestamp();
 
-const APP_VERSION = 'bodega-3.2.5';
+const APP_VERSION = 'bodega-3.2.6';
 const DOMINIO_LOGIN = '@luanaqua.app';
 function emailDeUsuario(u) {
   const limpio = String(u || '').trim().toLowerCase().replace(/[^a-z0-9._-]/g, '');
@@ -249,7 +249,7 @@ function calcularStock() {
         case 'RECEPCION': I(it.id).rec += q; break;
         case 'PRODUCCION': if (m.area === 'ENVASES') E(it.nombre).prod += q;
           else { /* [ENTREGA] lo que producción devolvió dañado cuenta como dañado, no como "a producción" */
-            const d = Math.min(q, Number(m.entrega?.danado?.[it.id]) || 0);
+            const d = Math.min(q, (Number(m.entrega?.danado?.[it.id]) || 0) + (Number(m.entrega?.roto?.[it.id]) || 0)); /* + lo que volvió roto */
             const r = Math.min(q - d, Number(m.entrega?.encontrado?.[it.id]) || 0);   /* faltante que apareció en bodega: vuelve al stock */
             const p = Math.min(q - d - r, Number(m.entrega?.perdido?.[it.id]) || 0);  /* faltante que no apareció: pérdida */
             I(it.id).prod += q - d - r - p; I(it.id).dano += d; I(it.id).perd += p; }
@@ -1040,10 +1040,11 @@ function abrirConfirmarEntrega(id) {
         ${lista.map(i => `<tr><td>${esc(i.nombre)}${i.categoria ? `<br><small style="color:var(--muted)">${esc(i.categoria)}</small>` : ''}</td><td class="n"><b>${num(dan[i.id])}</b></td></tr>`).join('')}
       </tbody></table></div><div class="msg info">Los dañados se descuentan del stock como <b>dañados</b>.</div>` : ''}
       ${listaF.length ? `<h2 style="margin-top:10px">Faltantes (no llegaron a Producción)</h2>
-        <p class="hint">Busca en tu bodega. En <b>Está en bodega</b> pon lo que encontraste: vuelve al stock. Lo que no aparezca queda como <b>pérdida</b>.</p>
-        <div class="tbl-wrap"><table class="tbl" id="tblFalt"><thead><tr><th>Producto</th><th class="n">Faltante</th><th class="n">Está en bodega</th><th class="n">Pérdida</th></tr></thead><tbody>
+        <p class="hint">Busca en tu bodega. En <b>Está en bodega</b> pon lo que encontraste en buen estado: vuelve al stock. En <b>Volvió roto</b> lo que regresó roto: va a dañado. Lo que no aparezca queda como <b>pérdida</b>.</p>
+        <div class="tbl-wrap"><table class="tbl" id="tblFalt"><thead><tr><th>Producto</th><th class="n">Faltante</th><th class="n">Está en bodega</th><th class="n">Volvió roto</th><th class="n">Pérdida</th></tr></thead><tbody>
         ${listaF.map(({ i }) => `<tr data-id="${esc(i.id)}" data-f="${Number(fal[i.id])}"><td>${esc(i.nombre)}${i.categoria ? `<br><small style="color:var(--muted)">${esc(i.categoria)}</small>` : ''}</td><td class="n"><b>${num(fal[i.id])}</b></td>
           <td class="n"><input class="in" type="number" inputmode="numeric" min="0" step="1" style="width:70px;padding:6px;text-align:right" data-enc placeholder="0" oninput="recalcFaltantes()"></td>
+          <td class="n"><input class="in" type="number" inputmode="numeric" min="0" step="1" style="width:70px;padding:6px;text-align:right" data-roto placeholder="0" oninput="recalcFaltantes()"></td>
           <td class="n" data-per>${num(fal[i.id])}</td></tr>`).join('')}
         </tbody></table></div><div id="resFalt"></div>` : ''}
       <label class="lbl">Observación <span id="obsReqF" class="hint"></span></label><textarea class="in" id="notaEntrega" style="text-transform:uppercase" placeholder="Ej. SE RECLAMA AL PROVEEDOR / SE ENCONTRÓ EN EL ESTANTE"></textarea>
@@ -1118,38 +1119,41 @@ function guardarConfirmRecepcion(id, ok) {
 function leerFaltantes() {
   return [...document.querySelectorAll('#tblFalt tbody tr')].map(tr => ({
     tr, id: tr.dataset.id, f: Number(tr.dataset.f) || 0,
-    enc: Math.max(0, Math.floor(Number(tr.querySelector('[data-enc]').value) || 0))
+    enc: Math.max(0, Math.floor(Number(tr.querySelector('[data-enc]').value) || 0)),
+    roto: Math.max(0, Math.floor(Number(tr.querySelector('[data-roto]')?.value) || 0))
   }));
 }
 function recalcFaltantes() {
   let per = 0, exceso = false;
   leerFaltantes().forEach(r => {
-    const p = r.f - r.enc, cel = r.tr.querySelector('[data-per]');
+    const p = r.f - r.enc - r.roto, cel = r.tr.querySelector('[data-per]');
     if (p < 0) { exceso = true; cel.innerHTML = '<span style="color:var(--red);font-weight:800">máx. ' + num(r.f) + '</span>'; }
     else { per += p; cel.innerHTML = p ? `<span style="color:var(--red);font-weight:800">${num(p)}</span>` : '<span style="color:var(--ok);font-weight:800">0 ✓</span>'; }
   });
   const res = $('#resFalt');
-  if (res) res.innerHTML = exceso ? '<div class="msg err">No puedes encontrar más de lo que falta.</div>'
-    : per ? `<div class="msg err">Quedarán <b>${num(per)}</b> unidad(es) como pérdida.</div>` : '<div class="msg ok">Todo lo faltante está en bodega: vuelve al stock.</div>';
+  if (res) res.innerHTML = exceso ? '<div class="msg err">Está en bodega + volvió roto no puede ser más de lo que falta.</div>'
+    : per ? `<div class="msg err">Quedarán <b>${num(per)}</b> unidad(es) como pérdida.</div>` : '<div class="msg ok">Todo lo faltante está identificado (en bodega o roto).</div>';
   const o = $('#obsReqF'); if (o) o.textContent = per ? '(obligatoria)' : '';
   const b = $('#btnDevol'); if (b) b.disabled = exceso;
 }
 function guardarDevolucion(id) {
   const m = S.movs.find(x => x._id === id); if (!m || m.entrega?.estado !== 'PENDIENTE_DEVOLUCION') return closeModal();
-  const nota = upper($('#notaEntrega')?.value, 300), encontrado = {}, perdido = {};
-  let totEnc = 0, totPer = 0;
+  const nota = upper($('#notaEntrega')?.value, 300), encontrado = {}, perdido = {}, roto = {};
+  let totEnc = 0, totPer = 0, totRoto = 0;
   for (const r of leerFaltantes()) {
-    if (r.enc > r.f) return alert('No puedes encontrar más de lo que falta.');
+    if (r.enc + r.roto > r.f) return alert('Está en bodega + volvió roto no puede ser más de lo que falta.');
     if (r.enc) { encontrado[r.id] = r.enc; totEnc += r.enc; }
-    if (r.f - r.enc) { perdido[r.id] = r.f - r.enc; totPer += r.f - r.enc; }
+    if (r.roto) { roto[r.id] = r.roto; totRoto += r.roto; }
+    const pe = r.f - r.enc - r.roto;
+    if (pe) { perdido[r.id] = pe; totPer += pe; }
   }
   if (totPer && !nota) return alert('Escribe una observación: explica qué pasó con lo que no apareció.');
   const dan = Number(m.entrega.totalDanado) || 0;
-  const resumen = (dan ? `Dañados recibidos: ${num(dan)}\n` : '') + (totEnc ? `Faltantes encontrados en bodega (vuelven al stock): ${num(totEnc)}\n` : '') + (totPer ? `Pérdida: ${num(totPer)}\n` : '');
+  const resumen = (dan ? `Dañados recibidos: ${num(dan)}\n` : '') + (totEnc ? `Faltantes encontrados en bodega (vuelven al stock): ${num(totEnc)}\n` : '') + (totRoto ? `Volvió roto (va a dañado): ${num(totRoto)}\n` : '') + (totPer ? `Pérdida: ${num(totPer)}\n` : '');
   if (!confirm('¿Confirmas la revisión?\n\n' + resumen)) return;
   db.collection('bodMovimientos').doc(id).update({
     'entrega.estado': totPer > 0 ? 'CON_DIFERENCIA' : 'CONFIRMADA',
-    'entrega.encontrado': encontrado, 'entrega.perdido': perdido, 'entrega.totalEncontrado': totEnc, 'entrega.totalPerdido': totPer,
+    'entrega.encontrado': encontrado, 'entrega.roto': roto, 'entrega.totalRoto': totRoto, 'entrega.perdido': perdido, 'entrega.totalEncontrado': totEnc, 'entrega.totalPerdido': totPer,
     'entrega.notaRecepcion': nota,
     'entrega.devolucionPor': S.user.uid, 'entrega.devolucionPorNombre': S.nombre, 'entrega.devolucionEn': TS(), 'entrega.devolucionLocal': Date.now()
   }).catch(e => alert('❌ No se pudo guardar: ' + (e.code === 'permission-denied' ? 'faltan publicar las reglas de Firestore para las entregas.' : e.message)));
@@ -1189,11 +1193,11 @@ function imprimirActaEntrega(id) {
   let thead, filas, pieTabla;
   if (deRec) {
     const conF = Number(en.totalFaltante) > 0, revF = en.perdido !== undefined;
-    const colsF = i => conF ? `<td class="r">${revF ? num(v(en.encontrado, i)) : '—'}</td><td class="r ${v(en.perdido, i) ? 'rojo' : ''}">${revF ? num(v(en.perdido, i)) : '—'}</td>` : '';
-    thead = '<th class="c">#</th><th>Producto</th><th>Categoría</th><th class="r">Enviado</th><th class="r">Recibido</th><th class="r">Dañado (devuelto)</th><th class="r">Faltante</th>' + (conF ? '<th class="r">Regresó a bodega</th><th class="r">Pérdida</th>' : '');
+    const colsF = i => conF ? `<td class="r">${revF ? num(v(en.encontrado, i)) : '—'}</td><td class="r">${revF ? num(v(en.roto, i)) : '—'}</td><td class="r ${v(en.perdido, i) ? 'rojo' : ''}">${revF ? num(v(en.perdido, i)) : '—'}</td>` : '';
+    thead = '<th class="c">#</th><th>Producto</th><th>Categoría</th><th class="r">Enviado</th><th class="r">Recibido</th><th class="r">Dañado (devuelto)</th><th class="r">Faltante</th>' + (conF ? '<th class="r">Regresó a bodega</th><th class="r">Volvió roto</th><th class="r">Pérdida</th>' : '');
     filas = (m.items || []).map((i, k) => `<tr><td class="c">${k + 1}</td><td>${esc(i.nombre)}</td><td>${esc(i.categoria || '')}</td><td class="r">${num(i.cantidad)}</td>
       <td class="r">${confirmadaProd ? num(v(en.recibido, i)) : '—'}</td><td class="r">${confirmadaProd ? num(v(en.danado, i)) : '—'}</td><td class="r">${confirmadaProd ? num(v(en.faltante, i)) : '—'}</td>${colsF(i)}</tr>`).join('');
-    pieTabla = `<tr class="tot"><td></td><td colspan="2">TOTAL</td><td class="r">${num(m.totalUnidades)}</td><td class="r">${confirmadaProd ? num(en.totalRecibido) : '—'}</td><td class="r">${confirmadaProd ? num(en.totalDanado) : '—'}</td><td class="r">${confirmadaProd ? num(en.totalFaltante) : '—'}</td>${conF ? `<td class="r">${revF ? num(en.totalEncontrado) : '—'}</td><td class="r">${revF ? num(en.totalPerdido) : '—'}</td>` : ''}</tr>`;
+    pieTabla = `<tr class="tot"><td></td><td colspan="2">TOTAL</td><td class="r">${num(m.totalUnidades)}</td><td class="r">${confirmadaProd ? num(en.totalRecibido) : '—'}</td><td class="r">${confirmadaProd ? num(en.totalDanado) : '—'}</td><td class="r">${confirmadaProd ? num(en.totalFaltante) : '—'}</td>${conF ? `<td class="r">${revF ? num(en.totalEncontrado) : '—'}</td><td class="r">${revF ? num(en.totalRoto || 0) : '—'}</td><td class="r">${revF ? num(en.totalPerdido) : '—'}</td>` : ''}</tr>`;
   } else {
     thead = '<th class="c">#</th><th>Producto</th><th>Categoría</th><th class="r">Retirado</th>';
     filas = (m.items || []).map((i, k) => `<tr><td class="c">${k + 1}</td><td>${esc(i.nombre)}</td><td>${esc(i.categoria || '')}</td><td class="r">${num(i.cantidad)}</td></tr>`).join('');
